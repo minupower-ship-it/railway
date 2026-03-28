@@ -9,16 +9,14 @@ load_dotenv()
 TOKEN      = os.getenv('DISCORD_TOKEN')
 RENDER_URL = "https://xh-7vlt.onrender.com"
 
+# ================== 채널 ID ==================
+POST_CHANNEL_ID = 1487520341151449091
+
 intents = discord.Intents.default()
 intents.message_content = True
 
 client = discord.Client(intents=intents)
 tree   = app_commands.CommandTree(client)
-
-# ================== 채널 ID ==================
-CHANNELS = {
-    "xxx": 1487520341151449091,
-}
 
 # ================== 결제 버튼 ==================
 class PaymentView(discord.ui.View):
@@ -28,7 +26,6 @@ class PaymentView(discord.ui.View):
     @discord.ui.button(label="Get Access", style=discord.ButtonStyle.success, emoji="💳", custom_id="s2_get_access")
     async def get_access(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-
         discord_id = str(interaction.user.id)
 
         try:
@@ -46,20 +43,13 @@ class PaymentView(discord.ui.View):
                     ephemeral=True
                 )
             else:
-                await interaction.followup.send(
-                    "❌ Failed to generate payment link. Please try again later.",
-                    ephemeral=True
-                )
+                await interaction.followup.send("❌ Failed to generate payment link. Please try again later.", ephemeral=True)
 
         except Exception as e:
             print(f"[S2 Bot] Payment link error: {e}")
-            await interaction.followup.send(
-                "❌ Server error. Please try again later.",
-                ephemeral=True
-            )
+            await interaction.followup.send("❌ Server error. Please try again later.", ephemeral=True)
 
 
-# ================== 셋업 명령어 ==================
 @tree.command(name="setup-payment", description="Set up payment message")
 async def setup_payment(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
@@ -76,11 +66,7 @@ async def setup_payment(interaction: discord.Interaction):
         value="• Access to all premium channels\n• Exclusive content library\n• Priority support\n• Lifetime access",
         inline=False
     )
-    embed.add_field(
-        name="Price",
-        value="**One-time payment** — Lifetime access",
-        inline=False
-    )
+    embed.add_field(name="Price", value="**One-time payment** — Lifetime access", inline=False)
     embed.set_footer(text="Click the button below to get started!")
 
     view = PaymentView()
@@ -96,58 +82,25 @@ class PostModal(discord.ui.Modal, title="New Content Post"):
     image_url = discord.ui.TextInput(label="Image URL", placeholder="https://... (image URL)", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
-        view = ChannelSelectView(
-            post_name=self.post_name.value,
-            file_size=self.file_size.value,
-            key=self.key.value,
-            link=self.link.value,
-            image_url=self.image_url.value
-        )
-        await interaction.response.send_message(
-            "📢 Select a channel to post in:",
-            view=view,
-            ephemeral=True
-        )
-
-
-class ChannelSelectView(discord.ui.View):
-    def __init__(self, post_name, file_size, key, link, image_url):
-        super().__init__(timeout=180)
-        self.add_item(ChannelSelect(post_name, file_size, key, link, image_url))
-
-
-class ChannelSelect(discord.ui.Select):
-    def __init__(self, post_name, file_size, key, link, image_url):
-        self.post_name = post_name
-        self.file_size = file_size
-        self.key       = key
-        self.link      = link
-        self.image_url = image_url
-
-        options = [discord.SelectOption(label=name, value=str(ch_id)) for name, ch_id in CHANNELS.items()]
-        super().__init__(placeholder="Select channel...", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        channel_id = int(self.values[0])
-        channel    = client.get_channel(channel_id)
+        channel = client.get_channel(POST_CHANNEL_ID)
 
         if not channel:
             await interaction.response.send_message("❌ Channel not found.", ephemeral=True)
             return
 
         embed = discord.Embed(color=0x2b2d31)
-        embed.set_image(url=self.image_url)
+        embed.set_image(url=self.image_url.value)
         embed.add_field(
-            name=f"{self.post_name} — {self.file_size}",
-            value=f"——————————————————\n🔒 *VIP link hidden*\n\n**Decryption Key:** `{self.key}`\n——————————————————",
+            name=f"{self.post_name.value} — {self.file_size.value}",
+            value=f"——————————————————\n🔒 *VIP link hidden*\n\n**Decryption Key:** `{self.key.value}`\n——————————————————",
             inline=False
         )
 
-        view = RevealLinkView(link=self.link)
+        view = RevealLinkView(link=self.link.value)
 
         if isinstance(channel, discord.ForumChannel):
             await channel.create_thread(
-                name=f"{self.post_name} — {self.file_size}",
+                name=f"{self.post_name.value} — {self.file_size.value}",
                 embed=embed,
                 view=view
             )
