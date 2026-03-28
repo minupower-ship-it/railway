@@ -69,7 +69,7 @@ async def setup_request(interaction: discord.Interaction):
     )
     embed.add_field(
         name="Request Any Model You Want",
-        value="Want access to exclusive content?\n\nGet premium access at **phouse.vip** and unlock:\n• Unlimited model requests\n• Exclusive content library\n• Priority updates",
+        value="Want access to exclusive content?\n\nGet premium access at **xhouse.vip** and unlock:\n• Unlimited model requests\n• Exclusive content library\n• Priority updates",
         inline=False
     )
 
@@ -81,6 +81,6 @@ async def setup_request(interaction: discord.Interaction):
 @client.event
 async def on_ready():
     await tree.sync()
-    print(f"✅ Request Bot이 온라인되었습니다! (/setup-request 로 버튼 설정)")
+    print(f"✅ Request Bot 온라인! ({client.user})")
 
 client.run(TOKEN)
