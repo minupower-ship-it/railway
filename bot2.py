@@ -37,22 +37,28 @@ class PaymentView(discord.ui.View):
 
             if data.get("url"):
                 await interaction.followup.send(
-                    f"✅ 아래 링크에서 결제를 완료해주세요!\n{data['url']}\n\n결제 완료 후 자동으로 역할이 부여됩니다.",
+                    f"✅ Complete your payment using the link below!\n{data['url']}\n\nYour role will be granted automatically after payment.",
                     ephemeral=True
                 )
             else:
-                await interaction.followup.send("❌ 결제 링크 생성에 실패했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
+                await interaction.followup.send(
+                    "❌ Failed to generate payment link. Please try again later.",
+                    ephemeral=True
+                )
 
         except Exception as e:
-            print(f"[S2 Bot] 결제 링크 생성 오류: {e}")
-            await interaction.followup.send("❌ 서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
+            print(f"[S2 Bot] Payment link error: {e}")
+            await interaction.followup.send(
+                "❌ Server error. Please try again later.",
+                ephemeral=True
+            )
 
 
 # ================== 셋업 명령어 ==================
-@tree.command(name="setup-payment", description="결제 안내 메시지 설정")
+@tree.command(name="setup-payment", description="Set up payment message")
 async def setup_payment(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
 
     embed = discord.Embed(
@@ -81,6 +87,6 @@ async def setup_payment(interaction: discord.Interaction):
 async def on_ready():
     await tree.sync()
     client.add_view(PaymentView())
-    print(f"✅ S2 Bot 온라인! ({client.user})")
+    print(f"✅ S2 Bot online! ({client.user})")
 
 client.run(TOKEN)
