@@ -14,13 +14,13 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# ================== 채널 이름 ==================
-CHANNEL_NAMES = [
-    "🇧‌🇱‌🇦‌🇨‌🇰‌",
-    "🇭🇮🇸🇵🇦🇳🇮🇨",
-    "🇦🇸🇮🇦🇳",
-    "🇧🇱🇦🇨🇰"
-]
+# ================== 채널 ID ==================
+CHANNELS = {
+    "🇦🇸🇮🇦🇳":     1487319260228358174,
+    "🇭🇮🇸🇵🇦🇳🇮🇨": 1487319298681864342,
+    "🇧‌🇱‌🇦‌🇨‌🇰‌":  1487319326204625047,
+    "🇧🇱🇦🇨🇰":     1487319363265626173,
+}
 
 # ================== Content Request ==================
 class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
@@ -92,7 +92,6 @@ class PostModal(discord.ui.Modal, title="New Content Post"):
     image_url = discord.ui.TextInput(label="Image URL", placeholder="https://... (이미지 URL)", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # 채널 선택 드롭다운 표시
         view = ChannelSelectView(
             post_name=self.post_name.value,
             file_size=self.file_size.value,
@@ -109,12 +108,7 @@ class PostModal(discord.ui.Modal, title="New Content Post"):
 
 class ChannelSelectView(discord.ui.View):
     def __init__(self, post_name, file_size, key, link, image_url):
-        super().__init__(timeout=60)
-        self.post_name = post_name
-        self.file_size = file_size
-        self.key = key
-        self.link = link
-        self.image_url = image_url
+        super().__init__(timeout=180)
         self.add_item(ChannelSelect(post_name, file_size, key, link, image_url))
 
 
@@ -126,18 +120,17 @@ class ChannelSelect(discord.ui.Select):
         self.link = link
         self.image_url = image_url
 
-        options = [discord.SelectOption(label=ch, value=ch) for ch in CHANNEL_NAMES]
+        options = [discord.SelectOption(label=name, value=str(ch_id)) for name, ch_id in CHANNELS.items()]
         super().__init__(placeholder="채널 선택...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        channel_name = self.values[0]
-        channel = discord.utils.get(interaction.guild.text_channels, name=channel_name)
+        channel_id = int(self.values[0])
+        channel = client.get_channel(channel_id)
 
         if not channel:
-            await interaction.response.send_message(f"❌ '{channel_name}' 채널을 찾을 수 없습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 채널을 찾을 수 없습니다.", ephemeral=True)
             return
 
-        # Reveal Link 버튼 포함한 Embed 포스팅
         embed = discord.Embed(color=0x2b2d31)
         embed.set_image(url=self.image_url)
         embed.add_field(
@@ -148,7 +141,7 @@ class ChannelSelect(discord.ui.Select):
 
         view = RevealLinkView(link=self.link)
         await channel.send(embed=embed, view=view)
-        await interaction.response.send_message(f"✅ {channel_name} 채널에 포스팅 완료!", ephemeral=True)
+        await interaction.response.send_message(f"✅ 포스팅 완료!", ephemeral=True)
 
 
 class RevealLinkView(discord.ui.View):
@@ -195,7 +188,6 @@ async def setup_post(interaction: discord.Interaction):
 @client.event
 async def on_ready():
     await tree.sync()
-    # persistent views 등록 (봇 재시작 후에도 버튼 작동)
     client.add_view(RequestButtonView())
     client.add_view(PostButtonView())
     print(f"✅ Bot 온라인! ({client.user})")
