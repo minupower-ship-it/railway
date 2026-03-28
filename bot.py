@@ -14,6 +14,15 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
+# ================== 채널 이름 ==================
+CHANNEL_NAMES = [
+    "🇧‌🇱‌🇦‌🇨‌🇰‌",
+    "🇭🇮🇸🇵🇦🇳🇮🇨",
+    "🇦🇸🇮🇦🇳",
+    "🇧🇱🇦🇨🇰"
+]
+
+# ================== Content Request ==================
 class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
     name = discord.ui.TextInput(label="Name", placeholder="요청자 이름", required=True, max_length=100)
     link = discord.ui.TextInput(label="Link (OF / X 등)", placeholder="https://...", required=True)
@@ -39,11 +48,8 @@ class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
             embed.set_footer(text=f"Requested at • {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
             await request_channel.send(embed=embed)
-            print(f"✅ 임베드 전송 성공 → #🇷🇪🇶🇺🇪🇸🇹")
-
             await interaction.response.send_message("✅ 요청이 성공적으로 접수되었습니다!", ephemeral=True)
         else:
-            print("❌ 🇷🇪🇶🇺🇪🇸🇹 채널을 찾을 수 없습니다!")
             await interaction.response.send_message("❌ request 채널을 찾을 수 없습니다. 관리자에게 문의해주세요.", ephemeral=True)
 
 
@@ -51,7 +57,7 @@ class RequestButtonView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Submit Content Request", style=discord.ButtonStyle.primary, emoji="📩")
+    @discord.ui.button(label="Submit Content Request", style=discord.ButtonStyle.primary, emoji="📩", custom_id="submit_request")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ContentRequestModal())
 
@@ -75,12 +81,123 @@ async def setup_request(interaction: discord.Interaction):
 
     view = RequestButtonView()
     await interaction.response.send_message(embed=embed, view=view)
-    await interaction.followup.send("✅ 버튼이 설정되었습니다!", ephemeral=True)
 
 
+# ================== Post System ==================
+class PostModal(discord.ui.Modal, title="New Content Post"):
+    post_name = discord.ui.TextInput(label="Name", placeholder="예: Poppi Louiz", required=True, max_length=100)
+    file_size = discord.ui.TextInput(label="File Size", placeholder="예: 10GB", required=True, max_length=20)
+    key = discord.ui.TextInput(label="Decryption Key", placeholder="복호화 키 입력", required=True, max_length=200)
+    link = discord.ui.TextInput(label="VIP Link", placeholder="https://mega.nz/...", required=True)
+    image_url = discord.ui.TextInput(label="Image URL", placeholder="https://... (이미지 URL)", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # 채널 선택 드롭다운 표시
+        view = ChannelSelectView(
+            post_name=self.post_name.value,
+            file_size=self.file_size.value,
+            key=self.key.value,
+            link=self.link.value,
+            image_url=self.image_url.value
+        )
+        await interaction.response.send_message(
+            "📢 포스팅할 채널을 선택해주세요:",
+            view=view,
+            ephemeral=True
+        )
+
+
+class ChannelSelectView(discord.ui.View):
+    def __init__(self, post_name, file_size, key, link, image_url):
+        super().__init__(timeout=60)
+        self.post_name = post_name
+        self.file_size = file_size
+        self.key = key
+        self.link = link
+        self.image_url = image_url
+        self.add_item(ChannelSelect(post_name, file_size, key, link, image_url))
+
+
+class ChannelSelect(discord.ui.Select):
+    def __init__(self, post_name, file_size, key, link, image_url):
+        self.post_name = post_name
+        self.file_size = file_size
+        self.key = key
+        self.link = link
+        self.image_url = image_url
+
+        options = [discord.SelectOption(label=ch, value=ch) for ch in CHANNEL_NAMES]
+        super().__init__(placeholder="채널 선택...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        channel_name = self.values[0]
+        channel = discord.utils.get(interaction.guild.text_channels, name=channel_name)
+
+        if not channel:
+            await interaction.response.send_message(f"❌ '{channel_name}' 채널을 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        # Reveal Link 버튼 포함한 Embed 포스팅
+        embed = discord.Embed(color=0x2b2d31)
+        embed.set_image(url=self.image_url)
+        embed.add_field(
+            name=f"{self.post_name} — {self.file_size}",
+            value=f"——————————————————\n🔒 *VIP link hidden*\n\n**Decryption Key:** `{self.key}`\n——————————————————",
+            inline=False
+        )
+
+        view = RevealLinkView(link=self.link)
+        await channel.send(embed=embed, view=view)
+        await interaction.response.send_message(f"✅ {channel_name} 채널에 포스팅 완료!", ephemeral=True)
+
+
+class RevealLinkView(discord.ui.View):
+    def __init__(self, link: str):
+        super().__init__(timeout=None)
+        self.link = link
+
+    @discord.ui.button(label="Reveal Link", style=discord.ButtonStyle.primary, emoji="🔓", custom_id="reveal_link")
+    async def reveal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            f"🔗 **Your VIP link:**\n{self.link}",
+            ephemeral=True
+        )
+
+
+class PostButtonView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="New Post", style=discord.ButtonStyle.success, emoji="📤", custom_id="new_post")
+    async def new_post(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
+            return
+        await interaction.response.send_modal(PostModal())
+
+
+@tree.command(name="setup-post", description="관리자용 포스팅 버튼 설정")
+async def setup_post(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="📤 Content Post Panel",
+        description="새 콘텐츠를 포스팅하려면 아래 버튼을 클릭하세요.",
+        color=0x2b2d31
+    )
+    view = PostButtonView()
+    await interaction.response.send_message(embed=embed, view=view)
+
+
+# ================== 봇 시작 ==================
 @client.event
 async def on_ready():
     await tree.sync()
-    print(f"✅ Request Bot 온라인! ({client.user})")
+    # persistent views 등록 (봇 재시작 후에도 버튼 작동)
+    client.add_view(RequestButtonView())
+    client.add_view(PostButtonView())
+    print(f"✅ Bot 온라인! ({client.user})")
 
 client.run(TOKEN)
