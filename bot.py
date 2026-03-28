@@ -140,8 +140,18 @@ class ChannelSelect(discord.ui.Select):
         )
 
         view = RevealLinkView(link=self.link)
-        await channel.send(embed=embed, view=view)
-        await interaction.response.send_message(f"✅ 포스팅 완료!", ephemeral=True)
+
+        # Forum 채널이면 스레드로 포스팅, 일반 텍스트 채널이면 그냥 send
+        if isinstance(channel, discord.ForumChannel):
+            await channel.create_thread(
+                name=f"{self.post_name} — {self.file_size}",
+                embed=embed,
+                view=view
+            )
+        else:
+            await channel.send(embed=embed, view=view)
+
+        await interaction.response.send_message("✅ 포스팅 완료!", ephemeral=True)
 
 
 class RevealLinkView(discord.ui.View):
