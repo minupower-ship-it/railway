@@ -19,10 +19,18 @@ tree   = app_commands.CommandTree(client)
 
 # ================== 채널 ID ==================
 CHANNELS = {
-    "🇦🇸🇮🇦🇳":     1487319260228358174,
+    "🇦🇸🇮🇦🇳-🇴🇹🇭🇪🇷🇸": 1487319260228358174,
     "🇭🇮🇸🇵🇦🇳🇮🇨": 1487319298681864342,
     "🇧‌🇱‌🇦‌🇨‌🇰‌":  1487319326204625047,
     "🇧🇱🇦🇨🇰":     1487319363265626173,
+}
+
+# ================== TXT 채널 매핑 ==================
+CHANNEL_MAP = {
+    "asian":    1487319260228358174,  # 🇦🇸🇮🇦🇳-🇴🇹🇭🇪🇷🇸
+    "hispanic": 1487319298681864342,  # 🇭🇮🇸🇵🇦🇳🇮🇨
+    "white":    1487319326204625047,  # 🇧‌🇱‌🇦‌🇨‌🇰‌
+    "black":    1487319363265626173,  # 🇧🇱🇦🇨🇰
 }
 
 # ================== 링크 저장/조회 헬퍼 ==================
@@ -228,6 +236,149 @@ class PostButtonView(discord.ui.View):
             return
         await interaction.response.send_modal(PostModal())
 
+
+
+# ================== Auto Post ==================
+@tree.command(name="auto-post", description="TXT 파일로 Mega 폴더 자동 포스팅")
+async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    # TXT 파일 읽기
+    try:
+        txt_content = await file.read()
+        lines = txt_content.decode('utf-8').strip().splitlines()
+    except Exception as e:
+        await interaction.followup.send(f"❌ Failed to read file: {e}", ephemeral=True)
+        return
+
+    # 라인 파싱
+    parsed = []
+    parse_errors = []
+
+    for i, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line:
+            continue
+
+        parts = [p.strip() for p in line.split('/')]
+
+        # 최소 3개 필요 (채널 / 폴더이름 / 이미지URL)
+        if len(parts) < 3:
+            parse_errors.append(f"Line {i}: `{line}` — 형식 오류 (채널/폴더이름/이미지URL 필요)")
+            continue
+
+        channel_key = parts[0].lower()
+        folder_name = parts[1]
+        image_urls  = parts[2:]
+
+        if channel_key not in CHANNEL_MAP:
+            parse_errors.append(f"Line {i}: `{line}` — 알 수 없는 채널 `{channel_key}`")
+            continue
+
+        parsed.append({
+            "channel_key": channel_key,
+            "folder_name": folder_name,
+            "image_urls":  image_urls,
+        })
+
+    if not parsed:
+        msg = "❌ No valid lines found.\n"
+        if parse_errors:
+            msg += "\n".join(parse_errors)
+        await interaction.followup.send(msg, ephemeral=True)
+        return
+
+    # Mega 스캔
+    folder_names = [p["folder_name"] for p in parsed]
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{RENDER_URL}/mega/scan",
+                json={"folders": folder_names},
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=120)
+            ) as res:
+                data = await res.json()
+    except Exception as e:
+        await interaction.followup.send(f"❌ Mega scan failed: {e}", ephemeral=True)
+        return
+
+    mega_results = {r["name"]: r for r in data.get("results", [])}
+
+    success_list = []
+    fail_list    = []
+
+    for item in parsed:
+        folder_name = item["folder_name"]
+        channel_key = item["channel_key"]
+        image_urls  = item["image_urls"]
+        channel_id  = CHANNEL_MAP[channel_key]
+        channel     = client.get_channel(channel_id)
+
+        if not channel:
+            fail_list.append(f"❌ `{folder_name}` — Channel not found")
+            continue
+
+        mega_data = mega_results.get(folder_name)
+        if not mega_data or not mega_data.get("success"):
+            reason = mega_data.get("reason", "Unknown error") if mega_data else "Not found in Mega"
+            fail_list.append(f"❌ `{folder_name}` — {reason}")
+            continue
+
+        try:
+            embed = discord.Embed(color=0x2b2d31)
+            embed.set_image(url=image_urls[0])
+            embed.add_field(
+                name=f"{folder_name} — {mega_data['file_size']}",
+                value=f"——————————————————\n🔒 *VIP link hidden*\n\n**Decryption Key:** `{mega_data['key']}`\n——————————————————",
+                inline=False
+            )
+
+            view = RevealLinkView()
+
+            if isinstance(channel, discord.ForumChannel):
+                thread, _ = await channel.create_thread(
+                    name=f"{folder_name} — {mega_data['file_size']}",
+                    embed=embed,
+                    view=view
+                )
+                await save_link(thread.id, mega_data["link"])
+
+                # 추가 이미지
+                for extra_url in image_urls[1:]:
+                    await thread.send(extra_url)
+            else:
+                msg = await channel.send(embed=embed, view=view)
+                await save_link(msg.id, mega_data["link"])
+
+                for extra_url in image_urls[1:]:
+                    await channel.send(extra_url)
+
+            success_list.append(f"✅ `{folder_name}` → {channel_key}")
+
+        except Exception as e:
+            fail_list.append(f"❌ `{folder_name}` — {str(e)}")
+
+    # 리포트
+    report = f"📊 **Auto-Post Report**\n\n"
+
+    if success_list:
+        report += f"✅ **Success ({len(success_list)}):**\n"
+        report += "\n".join(success_list) + "\n\n"
+
+    if fail_list:
+        report += f"❌ **Failed ({len(fail_list)}):**\n"
+        report += "\n".join(fail_list) + "\n\n"
+
+    if parse_errors:
+        report += f"⚠️ **Parse Errors ({len(parse_errors)}):**\n"
+        report += "\n".join(parse_errors)
+
+    await interaction.followup.send(report, ephemeral=True)
 
 @tree.command(name="setup-post", description="관리자용 포스팅 버튼 설정")
 async def setup_post(interaction: discord.Interaction):
