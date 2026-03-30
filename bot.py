@@ -7,8 +7,9 @@ import aiohttp
 
 load_dotenv()
 
-TOKEN      = os.getenv('DISCORD_TOKEN')
-RENDER_URL = "https://xh-7vlt.onrender.com"
+TOKEN           = os.getenv('DISCORD_TOKEN')
+RENDER_URL      = "https://xh-7vlt.onrender.com"
+LINK_STORE_ID   = 1488022953525248141  # XHouse Dummy 채널 ID
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -23,6 +24,23 @@ CHANNELS = {
     "🇧‌🇱‌🇦‌🇨‌🇰‌":  1487319326204625047,
     "🇧🇱🇦🇨🇰":     1487319363265626173,
 }
+
+# ================== 링크 저장/조회 헬퍼 ==================
+async def save_link(thread_id: int, link: str):
+    channel = client.get_channel(LINK_STORE_ID)
+    if channel:
+        await channel.send(f"{thread_id} | {link}")
+
+async def get_link(thread_id: int) -> str:
+    channel = client.get_channel(LINK_STORE_ID)
+    if not channel:
+        return None
+    async for message in channel.history(limit=500):
+        if message.content.startswith(f"{thread_id} |"):
+            parts = message.content.split(" | ", 1)
+            if len(parts) == 2:
+                return parts[1].strip()
+    return None
 
 # ================== Content Request ==================
 class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
@@ -112,16 +130,8 @@ async def setup_payment(interaction: discord.Interaction):
         description="Get lifetime access to exclusive content, model packages, and private channels.",
         color=0x7b6eff
     )
-    embed.add_field(
-        name="Lifetime — $45",
-        value="• Private request bot\n• 50,000+ model packages\n• Lifetime access to all channels\n• Priority support",
-        inline=True
-    )
-    embed.add_field(
-        name="VIP Lifetime — $80",
-        value="• Everything in Lifetime\n• Unlimited requests for life\n• 3 months early access\n• Private personal request bot",
-        inline=True
-    )
+    embed.add_field(name="Lifetime — $45", value="• Private request bot\n• 50,000+ model packages\n• Lifetime access to all channels\n• Priority support", inline=True)
+    embed.add_field(name="VIP Lifetime — $80", value="• Everything in Lifetime\n• Unlimited requests for life\n• 3 months early access\n• Private personal request bot", inline=True)
     embed.set_footer(text="One-time payment. No subscriptions. No renewals.")
     view = PaymentView()
     await interaction.response.send_message(embed=embed, view=view)
@@ -168,6 +178,7 @@ class ChannelSelect(discord.ui.Select):
         if not channel:
             await interaction.response.send_message("❌ 채널을 찾을 수 없습니다.", ephemeral=True)
             return
+
         embed = discord.Embed(color=0x2b2d31)
         embed.set_image(url=self.image_url)
         embed.add_field(
@@ -175,22 +186,35 @@ class ChannelSelect(discord.ui.Select):
             value=f"——————————————————\n🔒 *VIP link hidden*\n\n**Decryption Key:** `{self.key}`\n——————————————————",
             inline=False
         )
-        view = RevealLinkView(link=self.link)
+
+        view = RevealLinkView()
+
         if isinstance(channel, discord.ForumChannel):
-            await channel.create_thread(name=f"{self.post_name} — {self.file_size}", embed=embed, view=view)
+            thread, _ = await channel.create_thread(
+                name=f"{self.post_name} — {self.file_size}",
+                embed=embed,
+                view=view
+            )
+            await save_link(thread.id, self.link)
         else:
-            await channel.send(embed=embed, view=view)
+            msg = await channel.send(embed=embed, view=view)
+            await save_link(msg.id, self.link)
+
         await interaction.response.send_message("✅ 포스팅 완료!", ephemeral=True)
 
 
 class RevealLinkView(discord.ui.View):
-    def __init__(self, link: str):
+    def __init__(self):
         super().__init__(timeout=None)
-        self.link = link
 
     @discord.ui.button(label="Reveal Link", style=discord.ButtonStyle.primary, emoji="🔓", custom_id="reveal_link")
     async def reveal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(f"🔗 **Your VIP link:**\n{self.link}", ephemeral=True)
+        thread_id = interaction.channel_id
+        link = await get_link(thread_id)
+        if link:
+            await interaction.response.send_message(f"🔗 **Your VIP link:**\n{link}", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Link not found. Please contact an admin.", ephemeral=True)
 
 
 class PostButtonView(discord.ui.View):
@@ -215,6 +239,20 @@ async def setup_post(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 
+# ================== 기존 포스트 링크 등록 ==================
+@tree.command(name="set-link", description="기존 포스트에 링크 등록 (관리자 전용)")
+async def set_link(interaction: discord.Interaction, thread_id: str, link: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
+        return
+    channel = client.get_channel(LINK_STORE_ID)
+    if channel:
+        await channel.send(f"{thread_id} | {link}")
+        await interaction.response.send_message(f"✅ Link saved for thread `{thread_id}`!", ephemeral=True)
+    else:
+        await interaction.response.send_message("❌ Storage channel not found.", ephemeral=True)
+
+
 # ================== 봇 시작 ==================
 @client.event
 async def on_ready():
@@ -222,6 +260,7 @@ async def on_ready():
     client.add_view(RequestButtonView())
     client.add_view(PostButtonView())
     client.add_view(PaymentView())
+    client.add_view(RevealLinkView())
     print(f"✅ XHouse Bot 온라인! ({client.user})")
 
 client.run(TOKEN)
