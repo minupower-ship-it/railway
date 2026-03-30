@@ -44,9 +44,9 @@ async def get_link(thread_id: int) -> str:
 
 # ================== Content Request ==================
 class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
-    name    = discord.ui.TextInput(label="Name", placeholder="요청자 이름", required=True, max_length=100)
+    name    = discord.ui.TextInput(label="Name", placeholder="Your name", required=True, max_length=100)
     link    = discord.ui.TextInput(label="Link (OF / X 등)", placeholder="https://...", required=True)
-    comment = discord.ui.TextInput(label="Comment", placeholder="추가 설명", required=False, style=discord.TextStyle.paragraph)
+    comment = discord.ui.TextInput(label="Comment", placeholder="Additional comments", required=False, style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
         request_channel = discord.utils.get(interaction.guild.text_channels, name="🇷🇪🇶🇺🇪🇸🇹")
@@ -59,9 +59,9 @@ class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
                 embed.add_field(name="Comment", value=self.comment.value, inline=False)
             embed.set_footer(text=f"Requested at • {datetime.now().strftime('%Y-%m-%d %H:%M')}")
             await request_channel.send(embed=embed)
-            await interaction.response.send_message("✅ 요청이 성공적으로 접수되었습니다!", ephemeral=True)
+            await interaction.response.send_message("✅ Your request has been submitted successfully!", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ request 채널을 찾을 수 없습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ Request channel not found. Please contact an admin.", ephemeral=True)
 
 
 class RequestButtonView(discord.ui.View):
@@ -78,7 +78,7 @@ async def setup_request(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
         return
-    embed = discord.Embed(title="#request-form에 오신 걸 환영합니다!", description="#request-form 채널의 시작이에요.", color=0x2b2d31)
+    embed = discord.Embed(title="Welcome to #request-form!", description="Submit your content requests here.", color=0x2b2d31)
     embed.add_field(name="Request Any Model You Want", value="Want access to exclusive content?\n\nGet premium access at **xhouse.vip** and unlock:\n• Unlimited model requests\n• Exclusive content library\n• Priority updates", inline=False)
     view = RequestButtonView()
     await interaction.response.send_message(embed=embed, view=view)
@@ -139,11 +139,11 @@ async def setup_payment(interaction: discord.Interaction):
 
 # ================== Post System ==================
 class PostModal(discord.ui.Modal, title="New Content Post"):
-    post_name = discord.ui.TextInput(label="Name", placeholder="예: Poppi Louiz", required=True, max_length=100)
-    file_size = discord.ui.TextInput(label="File Size", placeholder="예: 10GB", required=True, max_length=20)
-    key       = discord.ui.TextInput(label="Decryption Key", placeholder="복호화 키 입력", required=True, max_length=200)
+    post_name = discord.ui.TextInput(label="Name", placeholder="e.g. Poppi Louiz", required=True, max_length=100)
+    file_size = discord.ui.TextInput(label="File Size", placeholder="e.g. 10GB", required=True, max_length=20)
+    key       = discord.ui.TextInput(label="Decryption Key", placeholder="Enter decryption key", required=True, max_length=200)
     link      = discord.ui.TextInput(label="VIP Link", placeholder="https://mega.nz/...", required=True)
-    image_url = discord.ui.TextInput(label="Image URL", placeholder="https://... (이미지 URL)", required=True)
+    image_url = discord.ui.TextInput(label="Image URL", placeholder="https://... (image URL)", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
         view = ChannelSelectView(
@@ -153,7 +153,7 @@ class PostModal(discord.ui.Modal, title="New Content Post"):
             link=self.link.value,
             image_url=self.image_url.value
         )
-        await interaction.response.send_message("📢 포스팅할 채널을 선택해주세요:", view=view, ephemeral=True)
+        await interaction.response.send_message("📢 Select a channel to post in:", view=view, ephemeral=True)
 
 
 class ChannelSelectView(discord.ui.View):
@@ -170,13 +170,13 @@ class ChannelSelect(discord.ui.Select):
         self.link      = link
         self.image_url = image_url
         options = [discord.SelectOption(label=name, value=str(ch_id)) for name, ch_id in CHANNELS.items()]
-        super().__init__(placeholder="채널 선택...", options=options)
+        super().__init__(placeholder="Select channel...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
         channel_id = int(self.values[0])
         channel    = client.get_channel(channel_id)
         if not channel:
-            await interaction.response.send_message("❌ 채널을 찾을 수 없습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ Channel not found.", ephemeral=True)
             return
 
         embed = discord.Embed(color=0x2b2d31)
@@ -200,7 +200,7 @@ class ChannelSelect(discord.ui.Select):
             msg = await channel.send(embed=embed, view=view)
             await save_link(msg.id, self.link)
 
-        await interaction.response.send_message("✅ 포스팅 완료!", ephemeral=True)
+        await interaction.response.send_message("✅ Posted successfully!", ephemeral=True)
 
 
 class RevealLinkView(discord.ui.View):
@@ -234,7 +234,7 @@ async def setup_post(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
         return
-    embed = discord.Embed(title="📤 Content Post Panel", description="새 콘텐츠를 포스팅하려면 아래 버튼을 클릭하세요.", color=0x2b2d31)
+    embed = discord.Embed(title="📤 Content Post Panel", description="Click the button below to post new content.", color=0x2b2d31)
     view = PostButtonView()
     await interaction.response.send_message(embed=embed, view=view)
 
