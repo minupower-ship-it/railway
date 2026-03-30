@@ -6,8 +6,9 @@ import aiohttp
 
 load_dotenv()
 
-TOKEN      = os.getenv('DISCORD_TOKEN')
-RENDER_URL = "https://xh-7vlt.onrender.com"
+TOKEN           = os.getenv('DISCORD_TOKEN')
+RENDER_URL      = "https://xh-7vlt.onrender.com"
+LINK_STORE_ID   = 1488005721378521118  # Dummy 채널 ID
 
 # ================== 채널 ID ==================
 POST_CHANNEL_ID = 1487520341151449091
@@ -17,6 +18,25 @@ intents.message_content = True
 
 client = discord.Client(intents=intents)
 tree   = app_commands.CommandTree(client)
+
+# ================== 링크 저장/조회 헬퍼 ==================
+async def save_link(thread_id: int, link: str):
+    """Dummy 채널에 thread_id | link 저장"""
+    channel = client.get_channel(LINK_STORE_ID)
+    if channel:
+        await channel.send(f"{thread_id} | {link}")
+
+async def get_link(thread_id: int) -> str:
+    """Dummy 채널에서 thread_id로 링크 조회"""
+    channel = client.get_channel(LINK_STORE_ID)
+    if not channel:
+        return None
+    async for message in channel.history(limit=500):
+        if message.content.startswith(f"{thread_id} |"):
+            parts = message.content.split(" | ", 1)
+            if len(parts) == 2:
+                return parts[1].strip()
+    return None
 
 # ================== 결제 버튼 ==================
 class PaymentView(discord.ui.View):
@@ -96,31 +116,43 @@ class PostModal(discord.ui.Modal, title="New Content Post"):
             inline=False
         )
 
-        view = RevealLinkView(link=self.link.value)
+        view = RevealLinkView()
 
         if isinstance(channel, discord.ForumChannel):
-            await channel.create_thread(
+            thread, _ = await channel.create_thread(
                 name=f"{self.post_name.value} — {self.file_size.value}",
                 embed=embed,
                 view=view
             )
+            # Dummy 채널에 링크 저장
+            await save_link(thread.id, self.link.value)
         else:
-            await channel.send(embed=embed, view=view)
+            msg = await channel.send(embed=embed, view=view)
+            await save_link(msg.id, self.link.value)
 
         await interaction.response.send_message("✅ Posted successfully!", ephemeral=True)
 
 
 class RevealLinkView(discord.ui.View):
-    def __init__(self, link: str):
+    def __init__(self):
         super().__init__(timeout=None)
-        self.link = link
 
     @discord.ui.button(label="Reveal Link", style=discord.ButtonStyle.primary, emoji="🔓", custom_id="s2_reveal_link")
     async def reveal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            f"🔗 **Your VIP link:**\n{self.link}",
-            ephemeral=True
-        )
+        # 현재 채널(스레드) ID로 링크 조회
+        thread_id = interaction.channel_id
+        link = await get_link(thread_id)
+
+        if link:
+            await interaction.response.send_message(
+                f"🔗 **Your VIP link:**\n{link}",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ Link not found. Please contact an admin.",
+                ephemeral=True
+            )
 
 
 class PostButtonView(discord.ui.View):
@@ -150,12 +182,28 @@ async def setup_post(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 
+# ================== 기존 포스트 링크 등록 ==================
+@tree.command(name="set-link", description="기존 포스트에 링크 등록 (관리자 전용)")
+async def set_link(interaction: discord.Interaction, thread_id: str, link: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+
+    channel = client.get_channel(LINK_STORE_ID)
+    if channel:
+        await channel.send(f"{thread_id} | {link}")
+        await interaction.response.send_message(f"✅ Link saved for thread `{thread_id}`!", ephemeral=True)
+    else:
+        await interaction.response.send_message("❌ Storage channel not found.", ephemeral=True)
+
+
 # ================== 봇 시작 ==================
 @client.event
 async def on_ready():
     await tree.sync()
     client.add_view(PaymentView())
     client.add_view(PostButtonView())
+    client.add_view(RevealLinkView())
     print(f"✅ S2 Bot online! ({client.user})")
 
 client.run(TOKEN)
