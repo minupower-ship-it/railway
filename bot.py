@@ -311,8 +311,22 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
 
     mega_results = {r["name"]: r for r in data.get("results", [])}
 
+    # 중복 방지: Dummy 채널에 이미 저장된 폴더 이름 목록 조회
+    existing_names = set()
+    store_channel = client.get_channel(LINK_STORE_ID)
+    if store_channel:
+        async for message in store_channel.history(limit=500):
+            content = message.content
+            if " | " in content:
+                # thread_id | link 형식에서 link 부분에 폴더 이름 없으므로
+                # 포스트 thread 이름과 매칭하기 위해 별도 태그 사용
+                pass
+            if content.startswith("POSTED | "):
+                existing_names.add(content.split("POSTED | ", 1)[1].strip())
+
     success_list = []
     fail_list    = []
+    skip_list    = []
 
     for item in parsed:
         folder_name = item["folder_name"]
@@ -325,6 +339,11 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
             fail_list.append(f"❌ `{folder_name}` — Channel not found")
             continue
 
+        # 중복 체크
+        if folder_name in existing_names:
+            skip_list.append(f"⏭️ `{folder_name}` — Already exists")
+            continue
+
         mega_data = mega_results.get(folder_name)
         if not mega_data or not mega_data.get("success"):
             reason = mega_data.get("reason", "Unknown error") if mega_data else "Not found in Mega"
@@ -335,7 +354,7 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
             embed = discord.Embed(color=0x2b2d31)
             embed.set_image(url=image_urls[0])
             embed.add_field(
-                name=f"{folder_name} — {mega_data['file_size']}",
+                name=folder_name,
                 value=f"——————————————————\n🔒 *VIP link hidden*\n\n**Decryption Key:** `{mega_data['key']}`\n——————————————————",
                 inline=False
             )
@@ -344,18 +363,22 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
 
             if isinstance(channel, discord.ForumChannel):
                 thread, _ = await channel.create_thread(
-                    name=f"{folder_name} — {mega_data['file_size']}",
+                    name=folder_name,
                     embed=embed,
                     view=view
                 )
                 await save_link(thread.id, mega_data["link"])
+                # 중복 방지용 태그 저장
+                if store_channel:
+                    await store_channel.send(f"POSTED | {folder_name}")
 
-                # 추가 이미지
                 for extra_url in image_urls[1:]:
                     await thread.send(extra_url)
             else:
                 msg = await channel.send(embed=embed, view=view)
                 await save_link(msg.id, mega_data["link"])
+                if store_channel:
+                    await store_channel.send(f"POSTED | {folder_name}")
 
                 for extra_url in image_urls[1:]:
                     await channel.send(extra_url)
@@ -371,6 +394,10 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
     if success_list:
         report += f"✅ **Success ({len(success_list)}):**\n"
         report += "\n".join(success_list) + "\n\n"
+
+    if skip_list:
+        report += f"⏭️ **Skipped — Already exists ({len(skip_list)}):**\n"
+        report += "\n".join(skip_list) + "\n\n"
 
     if fail_list:
         report += f"❌ **Failed ({len(fail_list)}):**\n"
