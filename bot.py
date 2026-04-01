@@ -7,10 +7,11 @@ import aiohttp
 
 load_dotenv()
 
-TOKEN           = os.getenv('DISCORD_TOKEN')
-RENDER_URL      = "https://xh-7vlt.onrender.com"
-API_SECRET_KEY  = os.getenv('API_SECRET_KEY')
-LINK_STORE_ID   = 1488022953525248141  # XHouse Dummy 채널 ID
+TOKEN             = os.getenv('DISCORD_TOKEN')
+RENDER_URL        = "https://xh-7vlt.onrender.com"
+API_SECRET_KEY    = os.getenv('API_SECRET_KEY')
+LINK_STORE_ID     = 1488022953525248141  # XHouse Dummy 채널 ID
+SUPPORT_CHANNEL_ID = int(os.getenv('SUPPORT_CHANNEL_ID', '0'))
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -405,6 +406,119 @@ async def set_link(interaction: discord.Interaction, thread_id: str, link: str):
         await interaction.response.send_message("❌ Storage channel not found.", ephemeral=True)
 
 
+# ================== Support & Review System ==================
+class StarSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="⭐  1 Star",           value="1"),
+            discord.SelectOption(label="⭐⭐  2 Stars",         value="2"),
+            discord.SelectOption(label="⭐⭐⭐  3 Stars",       value="3"),
+            discord.SelectOption(label="⭐⭐⭐⭐  4 Stars",     value="4"),
+            discord.SelectOption(label="⭐⭐⭐⭐⭐  5 Stars",   value="5"),
+        ]
+        super().__init__(placeholder="Select your rating...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(ReviewModal(stars=int(self.values[0])))
+
+
+class StarRatingView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(StarSelect())
+
+
+class ReviewModal(discord.ui.Modal, title="Leave a Review"):
+    review_text = discord.ui.TextInput(
+        label="Your Review",
+        placeholder="Share your experience...",
+        style=discord.TextStyle.paragraph,
+        max_length=500
+    )
+
+    def __init__(self, stars: int):
+        super().__init__()
+        self.stars = stars
+
+    async def on_submit(self, interaction: discord.Interaction):
+        channel = client.get_channel(SUPPORT_CHANNEL_ID)
+        if not channel:
+            await interaction.response.send_message("❌ Error submitting review. Please contact an admin.", ephemeral=True)
+            return
+
+        stars_display = "⭐" * self.stars
+        embed = discord.Embed(color=0x9b59b6, timestamp=datetime.utcnow())
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.description = f'*"{self.review_text.value}"*\n\n{stars_display}'
+        embed.set_footer(text=f"{interaction.user.display_name} — Verified Member")
+
+        await channel.send(f"<@{interaction.user.id}> left a review:", embed=embed)
+        await interaction.response.send_message("✅ Thank you for your review! We really appreciate it.", ephemeral=True)
+
+
+class SupportModal(discord.ui.Modal, title="Submit a Support Ticket"):
+    subject = discord.ui.TextInput(
+        label="Subject",
+        placeholder="Brief description of your issue",
+        max_length=100
+    )
+    message = discord.ui.TextInput(
+        label="Message",
+        placeholder="Describe your issue in detail...",
+        style=discord.TextStyle.paragraph,
+        max_length=1000
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        channel = client.get_channel(SUPPORT_CHANNEL_ID)
+        if not channel:
+            await interaction.response.send_message("❌ Error submitting ticket. Please contact an admin.", ephemeral=True)
+            return
+
+        embed = discord.Embed(title="🎫 New Support Ticket", color=0x5865f2, timestamp=datetime.utcnow())
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.add_field(name="Subject", value=self.subject.value, inline=False)
+        embed.add_field(name="Message", value=self.message.value, inline=False)
+        embed.set_footer(text=f"{interaction.user} • {interaction.user.id}")
+
+        await channel.send(f"<@{interaction.user.id}> submitted a support ticket:", embed=embed)
+        await interaction.response.send_message("✅ Your ticket has been submitted! We'll get back to you as soon as possible.", ephemeral=True)
+
+
+class SupportPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Support", style=discord.ButtonStyle.primary, emoji="🎫", custom_id="support_ticket")
+    async def support(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(SupportModal())
+
+    @discord.ui.button(label="Review", style=discord.ButtonStyle.secondary, emoji="⭐", custom_id="review_panel")
+    async def review(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "**Select your star rating:**",
+            view=StarRatingView(),
+            ephemeral=True
+        )
+
+
+@tree.command(name="setup-support", description="Support & Review 패널 설정")
+async def setup_support(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="💬 Support & Reviews",
+        description="Need help or want to share your experience? Use the buttons below.",
+        color=0x7b6eff
+    )
+    embed.add_field(name="🎫 Support", value="Having an issue? Submit a ticket and we'll help you out.", inline=False)
+    embed.add_field(name="⭐ Review", value="Enjoying the content? Leave us a review — it means a lot!", inline=False)
+    view = SupportPanelView()
+    await interaction.response.send_message(embed=embed, view=view)
+
+
 # ================== 봇 시작 ==================
 @client.event
 async def on_ready():
@@ -413,6 +527,7 @@ async def on_ready():
     client.add_view(PostButtonView())
     client.add_view(PaymentView())
     client.add_view(RevealLinkView())
+    client.add_view(SupportPanelView())
     print(f"✅ XHouse Bot 온라인! ({client.user})")
 
 client.run(TOKEN)
