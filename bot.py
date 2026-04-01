@@ -60,13 +60,13 @@ class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
     async def on_submit(self, interaction: discord.Interaction):
         request_channel = discord.utils.get(interaction.guild.text_channels, name="🇷🇪🇶🇺🇪🇸🇹")
         if request_channel:
-            embed = discord.Embed(title="🆕 New Content Request", description="A new content request has been submitted!", color=0x9b59b6, timestamp=datetime.now())
+            embed = discord.Embed(title="🆕 New Content Request", description="A new content request has been submitted!", color=0x9b59b6, timestamp=datetime.utcnow())
             embed.add_field(name="Requested By", value=interaction.user.mention, inline=True)
             embed.add_field(name="Name", value=self.name.value, inline=True)
             embed.add_field(name="Content Link", value=self.link.value, inline=False)
             if self.comment.value and self.comment.value.strip():
                 embed.add_field(name="Comment", value=self.comment.value, inline=False)
-            embed.set_footer(text=f"Requested at • {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            embed.set_footer(text=f"Requested at • {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC")
             await request_channel.send(embed=embed)
             await interaction.response.send_message("✅ Your request has been submitted successfully!", ephemeral=True)
         else:
@@ -139,8 +139,8 @@ async def setup_payment(interaction: discord.Interaction):
         description="Get lifetime access to exclusive content, model packages, and private channels.",
         color=0x7b6eff
     )
-    embed.add_field(name="Lifetime — $45", value="• Private request bot\n• 50,000+ model packages\n• Lifetime access to all channels\n• Priority support", inline=True)
-    embed.add_field(name="VIP Lifetime — $80", value="• Everything in Lifetime\n• Unlimited requests for life\n• 3 months early access\n• Private personal request bot", inline=True)
+    embed.add_field(name="Lifetime — $45", value="• Private request\n• 1,000+ model packages\n• Lifetime access to all channels\n• Priority support", inline=True)
+    embed.add_field(name="VIP Lifetime — $80", value="• Everything in Lifetime\n• Unlimited requests for life\n• Early access to new drops\n• Private personal request bot", inline=True)
     embed.set_footer(text="One-time payment. No subscriptions. No renewals.")
     view = PaymentView()
     await interaction.response.send_message(embed=embed, view=view)
