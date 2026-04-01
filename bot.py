@@ -404,7 +404,18 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
         report += f"⚠️ **Parse Errors ({len(parse_errors)}):**\n"
         report += "\n".join(parse_errors)
 
-    await interaction.followup.send(report, ephemeral=True)
+    # Discord 2000자 제한 → 청크로 나눠서 전송
+    chunks = []
+    while len(report) > 1900:
+        split_at = report.rfind('\n', 0, 1900)
+        if split_at == -1:
+            split_at = 1900
+        chunks.append(report[:split_at])
+        report = report[split_at:].lstrip('\n')
+    chunks.append(report)
+
+    for i, chunk in enumerate(chunks):
+        await interaction.followup.send(chunk, ephemeral=True)
 
 @tree.command(name="setup-post", description="관리자용 포스팅 버튼 설정")
 async def setup_post(interaction: discord.Interaction):
