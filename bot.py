@@ -9,6 +9,7 @@ load_dotenv()
 
 TOKEN           = os.getenv('DISCORD_TOKEN')
 RENDER_URL      = "https://xh-7vlt.onrender.com"
+API_SECRET_KEY  = os.getenv('API_SECRET_KEY')
 LINK_STORE_ID   = 1488022953525248141  # XHouse Dummy 채널 ID
 
 intents = discord.Intents.default()
@@ -113,7 +114,7 @@ class PaymentView(discord.ui.View):
                 async with session.post(
                     f"{RENDER_URL}/create-checkout",
                     json={"plan": plan, "discord_id": discord_id},
-                    headers={"Content-Type": "application/json"}
+                    headers={"Content-Type": "application/json", "X-API-Key": API_SECRET_KEY}
                 ) as res:
                     data = await res.json()
             if data.get("url"):
@@ -299,7 +300,7 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
             async with session.post(
                 f"{RENDER_URL}/mega/scan",
                 json={"folders": folder_names},
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", "X-API-Key": API_SECRET_KEY},
                 timeout=aiohttp.ClientTimeout(total=120)
             ) as res:
                 data = await res.json()

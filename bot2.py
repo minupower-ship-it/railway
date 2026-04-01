@@ -8,6 +8,7 @@ load_dotenv()
 
 TOKEN           = os.getenv('DISCORD_TOKEN')
 RENDER_URL      = "https://xh-7vlt.onrender.com"
+API_SECRET_KEY  = os.getenv('API_SECRET_KEY')
 LINK_STORE_ID   = 1488005721378521118  # Dummy 채널 ID
 
 # ================== 채널 ID ==================
@@ -53,7 +54,7 @@ class PaymentView(discord.ui.View):
                 async with session.post(
                     f"{RENDER_URL}/s2/create-checkout",
                     json={"discord_id": discord_id},
-                    headers={"Content-Type": "application/json"}
+                    headers={"Content-Type": "application/json", "X-API-Key": API_SECRET_KEY}
                 ) as res:
                     data = await res.json()
 
