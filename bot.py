@@ -4,6 +4,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import os
 import aiohttp
+import json
 
 load_dotenv()
 
@@ -300,11 +301,11 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{RENDER_URL}/mega/scan",
-                json={"folders": folder_names},
-                headers={"Content-Type": "application/json", "X-API-Key": API_SECRET_KEY},
+                data=json.dumps({"folders": folder_names}),
+                headers={"Content-Type": "application/json", "X-API-Key": API_SECRET_KEY or ""},
                 timeout=aiohttp.ClientTimeout(total=120)
             ) as res:
-                data = await res.json()
+                data = await res.json(content_type=None)
     except Exception as e:
         await interaction.followup.send(f"❌ Mega scan failed: {e}", ephemeral=True)
         return
@@ -316,11 +317,7 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
     store_channel = client.get_channel(LINK_STORE_ID)
     if store_channel:
         async for message in store_channel.history(limit=500):
-            content = message.content
-            if " | " in content:
-                # thread_id | link 형식에서 link 부분에 폴더 이름 없으므로
-                # 포스트 thread 이름과 매칭하기 위해 별도 태그 사용
-                pass
+            content = message.content or ""
             if content.startswith("POSTED | "):
                 existing_names.add(content.split("POSTED | ", 1)[1].strip())
 
