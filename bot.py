@@ -303,7 +303,7 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
                 f"{RENDER_URL}/mega/scan",
                 data=json.dumps({"folders": folder_names}),
                 headers={"Content-Type": "application/json", "X-API-Key": API_SECRET_KEY or ""},
-                timeout=aiohttp.ClientTimeout(total=120)
+                timeout=aiohttp.ClientTimeout(total=300)
             ) as res:
                 data = await res.json(content_type=None)
     except Exception as e:
