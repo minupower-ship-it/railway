@@ -310,7 +310,13 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
         await interaction.followup.send(f"❌ Mega scan failed: {e}", ephemeral=True)
         return
 
+    # API 에러 응답 체크
+    if data.get("error"):
+        await interaction.followup.send(f"❌ Mega scan error: {data['error']}", ephemeral=True)
+        return
+
     mega_results = {r["name"]: r for r in data.get("results", [])}
+    print(f"[AutoPost] map_size={data.get('debug_map_size', 'N/A')} results={len(mega_results)}")
 
     # 중복 방지: Dummy 채널에 이미 저장된 폴더 이름 목록 조회
     existing_names = set()
