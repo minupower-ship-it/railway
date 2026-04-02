@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 import os
 import aiohttp
 import json
+import io
+import openpyxl
 
 load_dotenv()
 
@@ -242,7 +244,7 @@ class PostButtonView(discord.ui.View):
 
 
 # ================== Auto Post ==================
-@tree.command(name="auto-post", description="TXT 파일로 Mega 폴더 자동 포스팅")
+@tree.command(name="auto-post", description="엑셀 파일로 자동 포스팅 (A:채널 B:이름 C:Mega링크 D+:이미지URL)")
 async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
@@ -250,79 +252,56 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
 
     await interaction.response.defer(ephemeral=True)
 
-    # TXT 파일 읽기
+    # 엑셀 파일 읽기
     try:
-        txt_content = await file.read()
-        lines = txt_content.decode('utf-8').strip().splitlines()
+        file_bytes = await file.read()
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
+        ws = wb.active
     except Exception as e:
-        await interaction.followup.send(f"❌ Failed to read file: {e}", ephemeral=True)
+        await interaction.followup.send(f"❌ Failed to read Excel file: {e}", ephemeral=True)
         return
 
-    # 라인 파싱
+    # 행 파싱 (A:채널 B:이름 C:Mega링크 D+:이미지URL)
     parsed = []
     parse_errors = []
 
-    for i, line in enumerate(lines, 1):
-        line = line.strip()
-        if not line:
+    for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True), 2):  # 1행은 헤더
+        if not any(row):
             continue
 
-        parts = [p.strip() for p in line.split('/')]
+        channel_key = str(row[0]).strip().lower() if row[0] else ""
+        folder_name = str(row[1]).strip() if row[1] else ""
+        mega_link   = str(row[2]).strip() if row[2] else ""
+        image_urls  = [str(c).strip() for c in row[3:] if c and str(c).strip()]
 
-        # 최소 3개 필요 (채널 / 폴더이름 / 이미지URL)
-        if len(parts) < 3:
-            parse_errors.append(f"Line {i}: `{line}` — 형식 오류 (채널/폴더이름/이미지URL 필요)")
+        if not channel_key or not folder_name or not mega_link:
+            parse_errors.append(f"Row {i}: A/B/C 컬럼 필수 — 채널/이름/Mega링크")
             continue
-
-        channel_key = parts[0].lower()
-        folder_name = parts[1]
-        image_urls  = parts[2:]
 
         if channel_key not in CHANNEL_MAP:
-            parse_errors.append(f"Line {i}: `{line}` — 알 수 없는 채널 `{channel_key}`")
+            parse_errors.append(f"Row {i}: 알 수 없는 채널 `{channel_key}`")
             continue
+
+        if not image_urls:
+            parse_errors.append(f"Row {i}: `{folder_name}` — 이미지 URL 없음 (D열 이상 필요)")
+            continue
+
+        # Mega 링크에서 키 추출
+        key = mega_link.split('#')[-1] if '#' in mega_link else ""
 
         parsed.append({
             "channel_key": channel_key,
             "folder_name": folder_name,
+            "mega_link":   mega_link,
+            "key":         key,
             "image_urls":  image_urls,
         })
 
     if not parsed:
-        msg = "❌ No valid lines found.\n"
+        msg = "❌ No valid rows found.\n"
         if parse_errors:
             msg += "\n".join(parse_errors)
         await interaction.followup.send(msg, ephemeral=True)
-        return
-
-    # Mega 스캔 — 10개씩 배치 요청 (Render 60초 타임아웃 우회)
-    folder_names = [p["folder_name"] for p in parsed]
-    BATCH_SIZE = 10
-    mega_results = {}
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            for i in range(0, len(folder_names), BATCH_SIZE):
-                batch = folder_names[i:i + BATCH_SIZE]
-                async with session.post(
-                    f"{RENDER_URL}/mega/scan",
-                    data=json.dumps({"folders": batch}),
-                    headers={"Content-Type": "application/json", "X-API-Key": API_SECRET_KEY or ""},
-                    timeout=aiohttp.ClientTimeout(total=55)
-                ) as res:
-                    data = await res.json(content_type=None)
-
-                if data.get("error"):
-                    await interaction.followup.send(f"❌ Mega scan error (batch {i//BATCH_SIZE+1}): {data['error']}", ephemeral=True)
-                    return
-
-                for r in data.get("results", []):
-                    mega_results[r["name"]] = r
-
-                print(f"[AutoPost] batch {i//BATCH_SIZE+1} done, total so far: {len(mega_results)}")
-
-    except Exception as e:
-        await interaction.followup.send(f"❌ Mega scan failed: {e}", ephemeral=True)
         return
 
     # 중복 방지: Dummy 채널에 이미 저장된 폴더 이름 목록 조회
@@ -341,6 +320,8 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
     for item in parsed:
         folder_name = item["folder_name"]
         channel_key = item["channel_key"]
+        mega_link   = item["mega_link"]
+        key         = item["key"]
         image_urls  = item["image_urls"]
         channel_id  = CHANNEL_MAP[channel_key]
         channel     = client.get_channel(channel_id)
@@ -354,18 +335,12 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
             skip_list.append(f"⏭️ `{folder_name}` — Already exists")
             continue
 
-        mega_data = mega_results.get(folder_name)
-        if not mega_data or not mega_data.get("success"):
-            reason = mega_data.get("reason", "Unknown error") if mega_data else "Not found in Mega"
-            fail_list.append(f"❌ `{folder_name}` — {reason}")
-            continue
-
         try:
             embed = discord.Embed(color=0x2b2d31)
             embed.set_image(url=image_urls[0])
             embed.add_field(
                 name=folder_name,
-                value=f"——————————————————\n🔒 *VIP link hidden*\n\n**Decryption Key:** `{mega_data['key']}`\n——————————————————",
+                value=f"——————————————————\n🔒 *VIP link hidden*\n\n**Decryption Key:** `{key}`\n——————————————————",
                 inline=False
             )
 
@@ -377,19 +352,16 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
                     embed=embed,
                     view=view
                 )
-                await save_link(thread.id, mega_data["link"])
-                # 중복 방지용 태그 저장
+                await save_link(thread.id, mega_link)
                 if store_channel:
                     await store_channel.send(f"POSTED | {folder_name}")
-
                 for extra_url in image_urls[1:]:
                     await thread.send(extra_url)
             else:
                 msg = await channel.send(embed=embed, view=view)
-                await save_link(msg.id, mega_data["link"])
+                await save_link(msg.id, mega_link)
                 if store_channel:
                     await store_channel.send(f"POSTED | {folder_name}")
-
                 for extra_url in image_urls[1:]:
                     await channel.send(extra_url)
 
