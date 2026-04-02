@@ -295,28 +295,35 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
         await interaction.followup.send(msg, ephemeral=True)
         return
 
-    # Mega 스캔
+    # Mega 스캔 — 10개씩 배치 요청 (Render 60초 타임아웃 우회)
     folder_names = [p["folder_name"] for p in parsed]
+    BATCH_SIZE = 10
+    mega_results = {}
+
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{RENDER_URL}/mega/scan",
-                data=json.dumps({"folders": folder_names}),
-                headers={"Content-Type": "application/json", "X-API-Key": API_SECRET_KEY or ""},
-                timeout=aiohttp.ClientTimeout(total=300)
-            ) as res:
-                data = await res.json(content_type=None)
+            for i in range(0, len(folder_names), BATCH_SIZE):
+                batch = folder_names[i:i + BATCH_SIZE]
+                async with session.post(
+                    f"{RENDER_URL}/mega/scan",
+                    data=json.dumps({"folders": batch}),
+                    headers={"Content-Type": "application/json", "X-API-Key": API_SECRET_KEY or ""},
+                    timeout=aiohttp.ClientTimeout(total=55)
+                ) as res:
+                    data = await res.json(content_type=None)
+
+                if data.get("error"):
+                    await interaction.followup.send(f"❌ Mega scan error (batch {i//BATCH_SIZE+1}): {data['error']}", ephemeral=True)
+                    return
+
+                for r in data.get("results", []):
+                    mega_results[r["name"]] = r
+
+                print(f"[AutoPost] batch {i//BATCH_SIZE+1} done, total so far: {len(mega_results)}")
+
     except Exception as e:
         await interaction.followup.send(f"❌ Mega scan failed: {e}", ephemeral=True)
         return
-
-    # API 에러 응답 체크
-    if data.get("error"):
-        await interaction.followup.send(f"❌ Mega scan error: {data['error']}", ephemeral=True)
-        return
-
-    mega_results = {r["name"]: r for r in data.get("results", [])}
-    print(f"[AutoPost] map_size={data.get('debug_map_size', 'N/A')} results={len(mega_results)}")
 
     # 중복 방지: Dummy 채널에 이미 저장된 폴더 이름 목록 조회
     existing_names = set()
