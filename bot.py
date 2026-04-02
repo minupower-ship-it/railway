@@ -65,7 +65,7 @@ class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
         request_channel = discord.utils.get(interaction.guild.text_channels, name="🇷🇪🇶🇺🇪🇸🇹")
         if request_channel:
             embed = discord.Embed(title="🆕 New Content Request", description="A new content request has been submitted!", color=0x9b59b6, timestamp=datetime.utcnow())
-            embed.add_field(name="Requested By", value=interaction.user.mention, inline=True)
+            embed.add_field(name="Requested By", value=f"{interaction.user.display_name}\n({interaction.user.name})", inline=True)
             embed.add_field(name="Name", value=self.name.value, inline=True)
             embed.add_field(name="Content Link", value=self.link.value, inline=False)
             if self.comment.value and self.comment.value.strip():
