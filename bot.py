@@ -1,6 +1,8 @@
 import discord
 from discord import app_commands
+from discord.ext import tasks
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import os
 import aiohttp
@@ -13,7 +15,9 @@ load_dotenv()
 TOKEN             = os.getenv('DISCORD_TOKEN')
 RENDER_URL        = "https://xh-7vlt.onrender.com"
 API_SECRET_KEY    = os.getenv('API_SECRET_KEY')
-LINK_STORE_ID     = 1488022953525248141  # XHouse Dummy 채널 ID
+LINK_STORE_ID      = 1488022953525248141  # XHouse Dummy 채널 ID
+PREVIEW_CHANNEL_ID = 1487501681129422980  # preview 채널
+EDMONTON_TZ        = ZoneInfo("America/Edmonton")
 SUPPORT_CHANNEL_ID = int(os.getenv('SUPPORT_CHANNEL_ID', '0'))
 
 intents = discord.Intents.default()
@@ -128,7 +132,7 @@ class PaymentView(discord.ui.View):
                     ephemeral=True
                 )
             else:
-                await interaction.followup.send("❌ Failed to generate payment link. Please try again later.", ephemeral=True)
+                await interaction.followup.send(f"❌ Failed to generate payment link.\nServer response: `{data}`", ephemeral=True)
         except Exception as e:
             print(f"[XHouse Bot] Payment error: {e}")
             await interaction.followup.send("❌ Server error. Please try again later.", ephemeral=True)
@@ -540,6 +544,38 @@ async def setup_support(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 
+# ================== 자동 Preview 포스팅 ==================
+@tasks.loop(time=[
+    datetime.time(0,  0, tzinfo=EDMONTON_TZ),   # 오전 12시 (자정)
+    datetime.time(12, 0, tzinfo=EDMONTON_TZ),   # 오후 12시 (정오)
+])
+async def post_preview():
+    channel = client.get_channel(PREVIEW_CHANNEL_ID)
+    if not channel:
+        return
+
+    # 이전 메시지 삭제
+    store = client.get_channel(LINK_STORE_ID)
+    if store:
+        async for msg in store.history(limit=200):
+            if msg.content.startswith("PREVIEW_MSG |"):
+                old_id = int(msg.content.split(" | ")[1].strip())
+                try:
+                    old_msg = await channel.fetch_message(old_id)
+                    await old_msg.delete()
+                except Exception:
+                    pass
+                await msg.delete()
+                break
+
+    # 새 메시지 포스팅
+    new_msg = await channel.send("@everyone\nCheck this free preview!  xhouse.vip")
+
+    # 메시지 ID 저장
+    if store:
+        await store.send(f"PREVIEW_MSG | {new_msg.id}")
+
+
 # ================== 봇 시작 ==================
 @client.event
 async def on_ready():
@@ -549,6 +585,7 @@ async def on_ready():
     client.add_view(PaymentView())
     client.add_view(RevealLinkView())
     client.add_view(SupportPanelView())
+    post_preview.start()
     print(f"✅ XHouse Bot 온라인! ({client.user})")
 
 client.run(TOKEN)
