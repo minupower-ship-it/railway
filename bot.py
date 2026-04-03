@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import tasks
-from datetime import datetime
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import os
@@ -546,8 +546,8 @@ async def setup_support(interaction: discord.Interaction):
 
 # ================== 자동 Preview 포스팅 ==================
 @tasks.loop(time=[
-    datetime.time(0,  0, tzinfo=EDMONTON_TZ),   # 오전 12시 (자정)
-    datetime.time(12, 0, tzinfo=EDMONTON_TZ),   # 오후 12시 (정오)
+    time(0,  0, tzinfo=EDMONTON_TZ),   # 오전 12시 (자정)
+    time(12, 0, tzinfo=EDMONTON_TZ),   # 오후 12시 (정오)
 ])
 async def post_preview():
     channel = client.get_channel(PREVIEW_CHANNEL_ID)
