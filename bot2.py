@@ -68,7 +68,7 @@ class PaymentView(discord.ui.View):
 
         except Exception as e:
             print(f"[S2 Bot] Payment link error: {e}")
-            await interaction.followup.send("❌ Server error. Please try again later.", ephemeral=True)
+            await interaction.followup.send(f"❌ Server error: `{e}`", ephemeral=True)
 
 
 @tree.command(name="setup-payment", description="Set up payment message")
