@@ -64,7 +64,7 @@ class PaymentView(discord.ui.View):
                     ephemeral=True
                 )
             else:
-                await interaction.followup.send("❌ Failed to generate payment link. Please try again later.", ephemeral=True)
+                await interaction.followup.send(f"❌ Failed to generate payment link.\nServer response: `{data}`", ephemeral=True)
 
         except Exception as e:
             print(f"[S2 Bot] Payment link error: {e}")
