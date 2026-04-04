@@ -53,8 +53,8 @@ class PaymentView(discord.ui.View):
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{RENDER_URL}/s2/create-checkout",
-                    json={"discord_id": discord_id},
-                    headers={"Content-Type": "application/json", "X-API-Key": API_SECRET_KEY}
+                    data=json.dumps({"discord_id": discord_id}),
+                    headers={"Content-Type": "application/json", "X-API-Key": API_SECRET_KEY or ""}
                 ) as res:
                     data = await res.json()
 
