@@ -67,7 +67,10 @@ class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
     comment = discord.ui.TextInput(label="Comment", placeholder="Additional comments", required=False, style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
-        request_channel = client.get_channel(1486473063649247352)
+        try:
+            request_channel = await client.fetch_channel(1486473063649247352)
+        except Exception:
+            request_channel = None
         if request_channel:
             embed = discord.Embed(title="🆕 New Content Request", description="A new content request has been submitted!", color=0x9b59b6, timestamp=datetime.utcnow())
             embed.add_field(name="Requested By", value=f"{interaction.user.display_name}\n({interaction.user.name})", inline=True)
