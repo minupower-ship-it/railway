@@ -53,7 +53,7 @@ async def get_link(thread_id: int) -> str:
     channel = client.get_channel(LINK_STORE_ID)
     if not channel:
         return None
-    async for message in channel.history(limit=500):
+    async for message in channel.history(limit=None):
         if message.content.startswith(f"{thread_id} |"):
             parts = message.content.split(" | ", 1)
             if len(parts) == 2:
@@ -316,7 +316,7 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
     existing_names = set()
     store_channel = client.get_channel(LINK_STORE_ID)
     if store_channel:
-        async for message in store_channel.history(limit=500):
+        async for message in store_channel.history(limit=None):
             content = message.content or ""
             if content.startswith("POSTED | "):
                 existing_names.add(content.split("POSTED | ", 1)[1].strip())
@@ -572,7 +572,7 @@ async def post_preview():
                 break
 
     # 새 메시지 포스팅
-    new_msg = await channel.send("@everyone\nCheck this free preview!  xhouse.vip")
+    new_msg = await channel.send("@everyone\nCheck this free preview!  https://www.xhouse.vip/")
 
     # 메시지 ID 저장
     if store:
