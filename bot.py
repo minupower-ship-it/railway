@@ -230,12 +230,13 @@ class RevealLinkView(discord.ui.View):
 
     @discord.ui.button(label="Reveal Link", style=discord.ButtonStyle.primary, emoji="🔓", custom_id="reveal_link")
     async def reveal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         thread_id = interaction.channel_id
         link = await get_link(thread_id)
         if link:
-            await interaction.response.send_message(f"🔗 **Your VIP link:**\n{link}", ephemeral=True)
+            await interaction.followup.send(f"🔗 **Your VIP link:**\n{link}", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ Link not found. Please contact an admin.", ephemeral=True)
+            await interaction.followup.send("❌ Link not found. Please contact an admin.", ephemeral=True)
 
 
 class PostButtonView(discord.ui.View):
