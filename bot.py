@@ -53,7 +53,7 @@ async def get_link(thread_id: int) -> str:
     channel = client.get_channel(LINK_STORE_ID)
     if not channel:
         return None
-    async for message in channel.history(limit=None):
+    async for message in channel.history(limit=2000):
         if message.content.startswith(f"{thread_id} |"):
             parts = message.content.split(" | ", 1)
             if len(parts) == 2:
@@ -317,7 +317,7 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
     existing_names = set()
     store_channel = client.get_channel(LINK_STORE_ID)
     if store_channel:
-        async for message in store_channel.history(limit=None):
+        async for message in store_channel.history(limit=2000):
             content = message.content or ""
             if content.startswith("POSTED | "):
                 existing_names.add(content.split("POSTED | ", 1)[1].strip())
