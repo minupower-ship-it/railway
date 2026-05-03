@@ -517,6 +517,7 @@ class SupportModal(discord.ui.Modal, title="Submit a Support Ticket"):
 class SupportPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(label="Donate", style=discord.ButtonStyle.link, emoji="💝", url="https://buy.stripe.com/3cI6oJaZo8PS1kF9281ck0m"))
 
     @discord.ui.button(label="Support", style=discord.ButtonStyle.primary, emoji="🎫", custom_id="support_ticket")
     async def support(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -544,6 +545,7 @@ async def setup_support(interaction: discord.Interaction):
     )
     embed.add_field(name="🎫 Support", value="Having an issue? Submit a ticket and we'll help you out.", inline=False)
     embed.add_field(name="⭐ Review", value="Enjoying the content? Leave us a review — it means a lot!", inline=False)
+    embed.add_field(name="💝 Donate", value="Want to support us? Any contribution is appreciated!", inline=False)
     view = SupportPanelView()
     await interaction.response.send_message(embed=embed, view=view)
 
