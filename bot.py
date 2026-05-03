@@ -63,7 +63,7 @@ async def get_link(thread_id: int) -> str:
 # ================== Content Request ==================
 class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
     name    = discord.ui.TextInput(label="Name", placeholder="Creator name", required=True, max_length=100)
-    link    = discord.ui.TextInput(label="Link (OF / X 등)", placeholder="https://...", required=True)
+    link    = discord.ui.TextInput(label="Link (OF / X / etc.)", placeholder="https://...", required=True)
     comment = discord.ui.TextInput(label="Comment", placeholder="Additional comments", required=False, style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
