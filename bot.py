@@ -146,6 +146,7 @@ class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
 class RequestButtonView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(label="Funding", style=discord.ButtonStyle.link, emoji="💰", url="https://buy.stripe.com/3cI6oJaZo8PS1kF9281ck0m"))
 
     @discord.ui.button(label="Submit Content Request", style=discord.ButtonStyle.primary, emoji="📩", custom_id="submit_request")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
