@@ -9,16 +9,20 @@ import aiohttp
 import json
 import io
 import openpyxl
+import asyncpg
 
 load_dotenv()
 
 TOKEN             = os.getenv('DISCORD_TOKEN')
 RENDER_URL        = "https://xh-7vlt.onrender.com"
 API_SECRET_KEY    = os.getenv('API_SECRET_KEY')
-LINK_STORE_ID      = 1488022953525248141  # XHouse Dummy 채널 ID
+DATABASE_URL       = os.getenv('DATABASE_URL')
+LINK_STORE_ID      = 1488022953525248141  # XHouse Dummy 채널 ID (마이그레이션용)
 PREVIEW_CHANNEL_ID = 1487501681129422980  # preview 채널
 EDMONTON_TZ        = ZoneInfo("America/Edmonton")
 SUPPORT_CHANNEL_ID = int(os.getenv('SUPPORT_CHANNEL_ID', '0'))
+
+db_pool = None
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -43,21 +47,75 @@ CHANNEL_MAP = {
     "black":    1487319363265626173,  # 🇧🇱🇦🇨🇰
 }
 
-# ================== 링크 저장/조회 헬퍼 ==================
-async def save_link(thread_id: int, link: str):
-    channel = client.get_channel(LINK_STORE_ID)
-    if channel:
-        await channel.send(f"{thread_id} | {link}")
+# ================== DB 초기화 ==================
+async def init_db():
+    global db_pool
+    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    async with db_pool.acquire() as conn:
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS links (
+                thread_id BIGINT PRIMARY KEY,
+                mega_link TEXT NOT NULL
+            )
+        ''')
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS posted_names (
+                name TEXT PRIMARY KEY
+            )
+        ''')
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS preview_msg (
+                id SERIAL PRIMARY KEY,
+                message_id BIGINT
+            )
+        ''')
+    print("✅ DB 초기화 완료")
 
-async def get_link(thread_id: int) -> str:
+# ================== Dummy 채널 → DB 마이그레이션 ==================
+async def migrate_from_dummy():
+    async with db_pool.acquire() as conn:
+        count = await conn.fetchval('SELECT COUNT(*) FROM links')
+        if count > 0:
+            print(f"[Migration] 이미 {count}개 링크 있음, 스킵")
+            return
+
+    print("[Migration] Dummy 채널에서 링크 가져오는 중...")
     channel = client.get_channel(LINK_STORE_ID)
     if not channel:
-        return None
+        print("[Migration] Dummy 채널 없음")
+        return
+
+    migrated = 0
     async for message in channel.history(limit=2000):
-        if message.content.startswith(f"{thread_id} |"):
-            parts = message.content.split(" | ", 1)
+        content = message.content or ""
+        if " | " in content and not content.startswith("POSTED |") and not content.startswith("PREVIEW_MSG |"):
+            parts = content.split(" | ", 1)
             if len(parts) == 2:
-                return parts[1].strip()
+                try:
+                    thread_id = int(parts[0].strip())
+                    mega_link = parts[1].strip()
+                    async with db_pool.acquire() as conn:
+                        await conn.execute(
+                            'INSERT INTO links (thread_id, mega_link) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+                            thread_id, mega_link
+                        )
+                    migrated += 1
+                except ValueError:
+                    pass
+    print(f"[Migration] 완료: {migrated}개 링크 마이그레이션")
+
+# ================== 링크 저장/조회 헬퍼 ==================
+async def save_link(thread_id: int, link: str):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            'INSERT INTO links (thread_id, mega_link) VALUES ($1, $2) ON CONFLICT (thread_id) DO UPDATE SET mega_link = $2',
+            thread_id, link
+        )
+
+async def get_link(thread_id: int) -> str:
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow('SELECT mega_link FROM links WHERE thread_id = $1', thread_id)
+    return row['mega_link'] if row else None
     return None
 
 # ================== Content Request ==================
@@ -313,14 +371,10 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
         await interaction.followup.send(msg, ephemeral=True)
         return
 
-    # 중복 방지: Dummy 채널에 이미 저장된 폴더 이름 목록 조회
-    existing_names = set()
-    store_channel = client.get_channel(LINK_STORE_ID)
-    if store_channel:
-        async for message in store_channel.history(limit=2000):
-            content = message.content or ""
-            if content.startswith("POSTED | "):
-                existing_names.add(content.split("POSTED | ", 1)[1].strip())
+    # 중복 방지: DB에서 이미 포스팅된 이름 목록 조회
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch('SELECT name FROM posted_names')
+    existing_names = {row['name'] for row in rows}
 
     success_list = []
     fail_list    = []
@@ -362,15 +416,15 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
                     view=view
                 )
                 await save_link(thread.id, mega_link)
-                if store_channel:
-                    await store_channel.send(f"POSTED | {folder_name}")
+                async with db_pool.acquire() as conn:
+                    await conn.execute('INSERT INTO posted_names (name) VALUES ($1) ON CONFLICT DO NOTHING', folder_name)
                 for extra_url in image_urls[1:]:
                     await thread.send(extra_url)
             else:
                 msg = await channel.send(embed=embed, view=view)
                 await save_link(msg.id, mega_link)
-                if store_channel:
-                    await store_channel.send(f"POSTED | {folder_name}")
+                async with db_pool.acquire() as conn:
+                    await conn.execute('INSERT INTO posted_names (name) VALUES ($1) ON CONFLICT DO NOTHING', folder_name)
                 for extra_url in image_urls[1:]:
                     await channel.send(extra_url)
 
@@ -427,12 +481,8 @@ async def set_link(interaction: discord.Interaction, thread_id: str, link: str):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
         return
-    channel = client.get_channel(LINK_STORE_ID)
-    if channel:
-        await channel.send(f"{thread_id} | {link}")
-        await interaction.response.send_message(f"✅ Link saved for thread `{thread_id}`!", ephemeral=True)
-    else:
-        await interaction.response.send_message("❌ Storage channel not found.", ephemeral=True)
+    await save_link(int(thread_id), link)
+    await interaction.response.send_message(f"✅ Link saved for thread `{thread_id}`!", ephemeral=True)
 
 
 # ================== Support & Review System ==================
@@ -561,30 +611,29 @@ async def post_preview():
         return
 
     # 이전 메시지 삭제
-    store = client.get_channel(LINK_STORE_ID)
-    if store:
-        async for msg in store.history(limit=200):
-            if msg.content.startswith("PREVIEW_MSG |"):
-                old_id = int(msg.content.split(" | ")[1].strip())
-                try:
-                    old_msg = await channel.fetch_message(old_id)
-                    await old_msg.delete()
-                except Exception:
-                    pass
-                await msg.delete()
-                break
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow('SELECT message_id FROM preview_msg ORDER BY id DESC LIMIT 1')
+    if row:
+        try:
+            old_msg = await channel.fetch_message(row['message_id'])
+            await old_msg.delete()
+        except Exception:
+            pass
 
     # 새 메시지 포스팅
     new_msg = await channel.send("@everyone\nCheck this free preview!  https://www.xhouse.vip/")
 
     # 메시지 ID 저장
-    if store:
-        await store.send(f"PREVIEW_MSG | {new_msg.id}")
+    async with db_pool.acquire() as conn:
+        await conn.execute('DELETE FROM preview_msg')
+        await conn.execute('INSERT INTO preview_msg (message_id) VALUES ($1)', new_msg.id)
 
 
 # ================== 봇 시작 ==================
 @client.event
 async def on_ready():
+    await init_db()
+    await migrate_from_dummy()
     await tree.sync()
     client.add_view(RequestButtonView())
     client.add_view(PostButtonView())
