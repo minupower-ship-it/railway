@@ -94,6 +94,7 @@ async def init_db():
                 converted_at TIMESTAMP DEFAULT NOW()
             )
         ''')
+        await conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS uq_rc_session ON referral_conversions(session_id)')
     print("✅ DB 초기화 완료")
 
 # ================== Dummy 채널 → DB 마이그레이션 ==================
