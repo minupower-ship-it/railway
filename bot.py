@@ -140,7 +140,6 @@ async def get_link(thread_id: int) -> str:
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow('SELECT mega_link FROM links WHERE thread_id = $1', thread_id)
     return row['mega_link'] if row else None
-    return None
 
 # ================== Content Request ==================
 class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
