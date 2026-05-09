@@ -22,10 +22,15 @@ PREVIEW_CHANNEL_ID = 1487501681129422980  # preview 채널
 EDMONTON_TZ        = ZoneInfo("America/Edmonton")
 SUPPORT_CHANNEL_ID = int(os.getenv('SUPPORT_CHANNEL_ID', '0'))
 
-db_pool = None
+db_pool      = None
+invite_cache = {}  # {guild_id: {invite_code: uses}}
+
+XHOUSE_GUILD_ID_INT = int(os.getenv('XHOUSE_GUILD_ID', '0'))
+XHOUSE_ROLE_ID_INT  = int(os.getenv('XHOUSE_ROLE_ID',  '0'))
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 client = discord.Client(intents=intents)
 tree   = app_commands.CommandTree(client)
@@ -67,6 +72,25 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS preview_msg (
                 id SERIAL PRIMARY KEY,
                 message_id BIGINT
+            )
+        ''')
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS paid_invites (
+                invite_code TEXT PRIMARY KEY,
+                session_id  TEXT NOT NULL,
+                ref         TEXT,
+                used        BOOLEAN DEFAULT FALSE,
+                created_at  TIMESTAMP DEFAULT NOW()
+            )
+        ''')
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS referral_conversions (
+                id           SERIAL PRIMARY KEY,
+                session_id   TEXT,
+                ref          TEXT,
+                discord_id   BIGINT,
+                plan         TEXT,
+                converted_at TIMESTAMP DEFAULT NOW()
             )
         ''')
     print("✅ DB 초기화 완료")
@@ -630,11 +654,97 @@ async def post_preview():
         await conn.execute('INSERT INTO preview_msg (message_id) VALUES ($1)', new_msg.id)
 
 
+# ================== 프로모터 통계 ==================
+@tree.command(name="promo-stats", description="프로모터별 전환 통계")
+async def promo_stats(interaction: discord.Interaction, promoter: str = None):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    async with db_pool.acquire() as conn:
+        if promoter:
+            rows = await conn.fetch(
+                'SELECT ref, COUNT(*) AS cnt FROM referral_conversions WHERE ref=$1 GROUP BY ref',
+                promoter
+            )
+        else:
+            rows = await conn.fetch(
+                'SELECT ref, COUNT(*) AS cnt FROM referral_conversions GROUP BY ref ORDER BY cnt DESC'
+            )
+    if not rows:
+        await interaction.followup.send("No data yet.", ephemeral=True)
+        return
+    embed = discord.Embed(title="📊 Promoter Stats", color=0x7b6eff)
+    for row in rows:
+        embed.add_field(name=f"🔗 {row['ref'] or 'direct'}", value=f"**{row['cnt']}** conversions", inline=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+# ================== 멤버 입장 (초대 추적 + 역할 자동 부여) ==================
+@client.event
+async def on_member_join(member: discord.Member):
+    guild = member.guild
+    if guild.id != XHOUSE_GUILD_ID_INT:
+        return
+    try:
+        new_invites = await guild.invites()
+    except Exception:
+        return
+
+    old_inv = invite_cache.get(guild.id, {})
+    used_code = None
+    for inv in new_invites:
+        if inv.uses > old_inv.get(inv.code, 0):
+            used_code = inv.code
+            break
+
+    invite_cache[guild.id] = {inv.code: inv.uses for inv in new_invites}
+
+    if not used_code:
+        return
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            'SELECT session_id, ref, used FROM paid_invites WHERE invite_code=$1', used_code
+        )
+    if not row or row['used']:
+        return
+
+    # 역할 부여
+    role = guild.get_role(XHOUSE_ROLE_ID_INT)
+    if role:
+        try:
+            await member.add_roles(role)
+            print(f"[Join] 역할 부여: {member} (invite: {used_code}, ref: {row['ref']})")
+        except Exception as e:
+            print(f"[Join] 역할 부여 실패: {e}")
+
+    # DM 발송
+    try:
+        await member.send("✅ Payment confirmed! Your membership role has been granted. Welcome to X-House! 🎉\n\n⭐ Enjoying your access? Drop a quick review in the server — it means a lot to us!")
+    except Exception:
+        pass
+
+    # DB 업데이트
+    async with db_pool.acquire() as conn:
+        await conn.execute('UPDATE paid_invites SET used=TRUE WHERE invite_code=$1', used_code)
+        await conn.execute(
+            'UPDATE referral_conversions SET discord_id=$1 WHERE session_id=$2',
+            member.id, row['session_id']
+        )
+
+
 # ================== 봇 시작 ==================
 @client.event
 async def on_ready():
     await init_db()
     await migrate_from_dummy()
+    for guild in client.guilds:
+        try:
+            invites = await guild.invites()
+            invite_cache[guild.id] = {inv.code: inv.uses for inv in invites}
+        except Exception:
+            pass
     await tree.sync()
     client.add_view(RequestButtonView())
     client.add_view(PostButtonView())
