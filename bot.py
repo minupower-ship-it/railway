@@ -20,7 +20,8 @@ DATABASE_URL       = os.getenv('DATABASE_URL')
 LINK_STORE_ID      = 1488022953525248141  # XHouse Dummy 채널 ID (마이그레이션용)
 PREVIEW_CHANNEL_ID = 1487501681129422980  # preview 채널
 EDMONTON_TZ        = ZoneInfo("America/Edmonton")
-SUPPORT_CHANNEL_ID = int(os.getenv('SUPPORT_CHANNEL_ID', '0'))
+SUPPORT_CHANNEL_ID  = int(os.getenv('SUPPORT_CHANNEL_ID', '0'))
+TX_CHANNEL_ID       = int(os.getenv('XHOUSE_TX_CHANNEL_ID', '1486794773263024309'))
 
 db_pool      = None
 invite_cache = {}  # {guild_id: {invite_code: uses}}
@@ -710,19 +711,36 @@ async def on_member_join(member: discord.Member):
         return
 
     # 역할 부여
+    role_granted = False
     role = guild.get_role(XHOUSE_ROLE_ID_INT)
     if role:
         try:
             await member.add_roles(role)
+            role_granted = True
             print(f"[Join] 역할 부여: {member} (invite: {used_code}, ref: {row['ref']})")
         except Exception as e:
             print(f"[Join] 역할 부여 실패: {e}")
 
-    # DM 발송
-    try:
-        await member.send("✅ Payment confirmed! Your membership role has been granted. Welcome to X-House! 🎉\n\n⭐ Enjoying your access? Drop a quick review in the server — it means a lot to us!")
-    except Exception:
-        pass
+    # 거래채널 로그
+    ref_label = row['ref'] or 'direct'
+    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+    tx_channel = client.get_channel(TX_CHANNEL_ID)
+    if tx_channel:
+        if role_granted:
+            log = f"✅ Web Join | <@{member.id}> | ref: `{ref_label}` | Role: ✅ Granted | {timestamp} UTC"
+        else:
+            log = f"⚠️ Web Join | <@{member.id}> | ref: `{ref_label}` | Role: ❌ FAILED | {timestamp} UTC"
+        try:
+            await tx_channel.send(log)
+        except Exception:
+            pass
+
+    # DM 발송 (역할 부여 성공 시에만)
+    if role_granted:
+        try:
+            await member.send("✅ Payment confirmed! Your membership role has been granted. Welcome to X-House! 🎉\n\n⭐ Enjoying your access? Drop a quick review in the server — it means a lot to us!")
+        except Exception:
+            pass
 
     # DB 업데이트
     async with db_pool.acquire() as conn:
