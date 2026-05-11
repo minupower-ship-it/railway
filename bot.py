@@ -95,6 +95,20 @@ async def init_db():
             )
         ''')
         await conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS uq_rc_session ON referral_conversions(session_id)')
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS promoter_invites (
+                promoter    TEXT PRIMARY KEY,
+                invite_code TEXT NOT NULL,
+                invite_url  TEXT NOT NULL
+            )
+        ''')
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS member_sources (
+                discord_id  BIGINT PRIMARY KEY,
+                promoter    TEXT NOT NULL,
+                joined_at   TIMESTAMP DEFAULT NOW()
+            )
+        ''')
     print("✅ DB 초기화 완료")
 
 # ================== Dummy 채널 → DB 마이그레이션 ==================
@@ -655,6 +669,31 @@ async def post_preview():
         await conn.execute('INSERT INTO preview_msg (message_id) VALUES ($1)', new_msg.id)
 
 
+# ================== 프로모터 초대 설정 ==================
+@tree.command(name="setup-promo-invite", description="프로모터 전용 초대 링크 생성")
+async def setup_promo_invite(interaction: discord.Interaction, name: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        invite = await interaction.channel.create_invite(max_age=0, max_uses=0, unique=True, reason=f"Promoter invite: {name}")
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                'INSERT INTO promoter_invites (promoter, invite_code, invite_url) VALUES ($1, $2, $3) ON CONFLICT (promoter) DO UPDATE SET invite_code=$2, invite_url=$3',
+                name, invite.code, str(invite)
+            )
+        # 캐시 업데이트
+        invites = await interaction.guild.invites()
+        invite_cache[interaction.guild.id] = {inv.code: inv.uses for inv in invites}
+        await interaction.followup.send(
+            f"✅ Promoter invite created!\n**Name:** `{name}`\n**Link:** {invite}\n\nRender에 이 코드 추가해줘: `PROMO_INVITE_URL_{name.upper()}={invite}`",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+
+
 # ================== 프로모터 통계 ==================
 @tree.command(name="promo-stats", description="프로모터별 전환 통계")
 async def promo_stats(interaction: discord.Interaction, promoter: str = None):
@@ -704,52 +743,60 @@ async def on_member_join(member: discord.Member):
     if not used_code:
         return
 
+    # ── 1. paid_invites 체크 (웹 결제 후 초대 플로우) ──
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
+        paid_row = await conn.fetchrow(
             'SELECT session_id, ref, used FROM paid_invites WHERE invite_code=$1', used_code
         )
-    if not row or row['used']:
+
+    if paid_row and not paid_row['used']:
+        role_granted = False
+        role = guild.get_role(XHOUSE_ROLE_ID_INT)
+        if role:
+            try:
+                await member.add_roles(role)
+                role_granted = True
+            except Exception as e:
+                print(f"[Join] 역할 부여 실패: {e}")
+
+        ref_label = paid_row['ref'] or 'direct'
+        timestamp  = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+        tx_channel = client.get_channel(TX_CHANNEL_ID)
+        if tx_channel:
+            status = "✅ Granted" if role_granted else "❌ FAILED"
+            icon   = "✅" if role_granted else "⚠️"
+            try:
+                await tx_channel.send(f"{icon} Web Join | <@{member.id}> | ref: `{ref_label}` | Role: {status} | {timestamp} UTC")
+            except Exception:
+                pass
+
+        if role_granted:
+            try:
+                await member.send("✅ Payment confirmed! Your membership role has been granted. Welcome to X-House! 🎉\n\n⭐ Enjoying your access? Drop a quick review in the server — it means a lot to us!")
+            except Exception:
+                pass
+
+        async with db_pool.acquire() as conn:
+            await conn.execute('UPDATE paid_invites SET used=TRUE WHERE invite_code=$1', used_code)
+            await conn.execute(
+                'UPDATE referral_conversions SET discord_id=$1 WHERE session_id=$2',
+                member.id, paid_row['session_id']
+            )
         return
 
-    # 역할 부여
-    role_granted = False
-    role = guild.get_role(XHOUSE_ROLE_ID_INT)
-    if role:
-        try:
-            await member.add_roles(role)
-            role_granted = True
-            print(f"[Join] 역할 부여: {member} (invite: {used_code}, ref: {row['ref']})")
-        except Exception as e:
-            print(f"[Join] 역할 부여 실패: {e}")
-
-    # 거래채널 로그
-    ref_label = row['ref'] or 'direct'
-    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
-    tx_channel = client.get_channel(TX_CHANNEL_ID)
-    if tx_channel:
-        if role_granted:
-            log = f"✅ Web Join | <@{member.id}> | ref: `{ref_label}` | Role: ✅ Granted | {timestamp} UTC"
-        else:
-            log = f"⚠️ Web Join | <@{member.id}> | ref: `{ref_label}` | Role: ❌ FAILED | {timestamp} UTC"
-        try:
-            await tx_channel.send(log)
-        except Exception:
-            pass
-
-    # DM 발송 (역할 부여 성공 시에만)
-    if role_granted:
-        try:
-            await member.send("✅ Payment confirmed! Your membership role has been granted. Welcome to X-House! 🎉\n\n⭐ Enjoying your access? Drop a quick review in the server — it means a lot to us!")
-        except Exception:
-            pass
-
-    # DB 업데이트
+    # ── 2. promoter_invites 체크 (Discord 결제 추적 플로우) ──
     async with db_pool.acquire() as conn:
-        await conn.execute('UPDATE paid_invites SET used=TRUE WHERE invite_code=$1', used_code)
-        await conn.execute(
-            'UPDATE referral_conversions SET discord_id=$1 WHERE session_id=$2',
-            member.id, row['session_id']
+        promo_row = await conn.fetchrow(
+            'SELECT promoter FROM promoter_invites WHERE invite_code=$1', used_code
         )
+
+    if promo_row:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                'INSERT INTO member_sources (discord_id, promoter) VALUES ($1, $2) ON CONFLICT (discord_id) DO NOTHING',
+                member.id, promo_row['promoter']
+            )
+        print(f"[Join] Promoter source 기록: {member} → {promo_row['promoter']}")
 
 
 # ================== 봇 시작 ==================
