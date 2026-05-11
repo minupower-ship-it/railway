@@ -687,7 +687,7 @@ async def setup_promo_invite(interaction: discord.Interaction, name: str):
         invites = await interaction.guild.invites()
         invite_cache[interaction.guild.id] = {inv.code: inv.uses for inv in invites}
         await interaction.followup.send(
-            f"✅ Promoter invite created!\n**Name:** `{name}`\n**Link:** {invite}\n\nRender에 이 코드 추가해줘: `PROMO_INVITE_URL_{name.upper()}={invite}`",
+            f"✅ Promoter invite created!\n**Name:** `{name}`\n**Link:** {invite}\n\n이제 `xhouse.vip/discount` 방문하면 이 링크로 자동 연결돼.",
             ephemeral=True
         )
     except Exception as e:
