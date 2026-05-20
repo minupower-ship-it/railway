@@ -329,8 +329,11 @@ class RevealLinkView(discord.ui.View):
     @discord.ui.button(label="Reveal Link", style=discord.ButtonStyle.primary, emoji="🔓", custom_id="reveal_link")
     async def reveal(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        thread_id = interaction.channel_id
-        link = await get_link(thread_id)
+        # 포럼 채널: channel_id = thread ID (저장 key와 일치)
+        # 일반 채널: channel_id = channel ID ≠ msg.id → message.id로 폴백
+        link = await get_link(interaction.channel_id)
+        if not link:
+            link = await get_link(interaction.message.id)
         if link:
             await interaction.followup.send(f"🔗 **Your VIP link:**\n{link}", ephemeral=True)
         else:
@@ -802,6 +805,13 @@ async def on_member_join(member: discord.Member):
 # ================== 봇 시작 ==================
 @client.event
 async def on_ready():
+    # ── 1. 영구 뷰 먼저 등록 (재시작 직후 버튼 클릭 즉시 응답 가능) ──
+    client.add_view(RequestButtonView())
+    client.add_view(PostButtonView())
+    client.add_view(PaymentView())
+    client.add_view(RevealLinkView())
+    client.add_view(SupportPanelView())
+    # ── 2. 이후 무거운 작업 처리 ──
     await init_db()
     await migrate_from_dummy()
     for guild in client.guilds:
@@ -811,11 +821,6 @@ async def on_ready():
         except Exception:
             pass
     await tree.sync()
-    client.add_view(RequestButtonView())
-    client.add_view(PostButtonView())
-    client.add_view(PaymentView())
-    client.add_view(RevealLinkView())
-    client.add_view(SupportPanelView())
     post_preview.start()
     print(f"✅ XHouse Bot 온라인! ({client.user})")
 
