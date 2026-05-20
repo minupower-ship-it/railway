@@ -522,6 +522,7 @@ async def migrate_spoiler(interaction: discord.Interaction):
                 link = await get_link(thread.id)
                 if not link:
                     skipped += 1
+                    await asyncio.sleep(0.5)
                     continue
 
                 bot_msg = None
@@ -529,18 +530,14 @@ async def migrate_spoiler(interaction: discord.Interaction):
                     if msg.author == client.user and msg.embeds:
                         bot_msg = msg
                         break
+                await asyncio.sleep(1)  # history 조회 후 딜레이
 
                 if not bot_msg:
                     skipped += 1
                     continue
 
                 embed = bot_msg.embeds[0]
-                if not embed.fields:
-                    skipped += 1
-                    continue
-
-                # 이미 스포일러로 변환된 경우 스킵
-                if '||' in embed.fields[0].value:
+                if not embed.fields or '||' in embed.fields[0].value:
                     skipped += 1
                     continue
 
@@ -555,8 +552,17 @@ async def migrate_spoiler(interaction: discord.Interaction):
 
                 await bot_msg.edit(embed=new_embed, view=None)
                 success += 1
-                await asyncio.sleep(1.5)  # rate limit 방지
+                await asyncio.sleep(2)  # edit 후 딜레이
 
+            except discord.HTTPException as e:
+                if e.status == 429:
+                    retry_after = e.response.headers.get('Retry-After', 5)
+                    print(f"[Migrate] Rate limited, {retry_after}초 대기")
+                    await asyncio.sleep(float(retry_after) + 1)
+                    failed += 1
+                else:
+                    print(f"[Migrate] thread {thread.id} 오류: {e}")
+                    failed += 1
             except Exception as e:
                 print(f"[Migrate] thread {thread.id} 오류: {e}")
                 failed += 1
