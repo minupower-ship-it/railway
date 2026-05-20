@@ -302,22 +302,17 @@ class ChannelSelect(discord.ui.Select):
         embed.set_image(url=self.image_url)
         embed.add_field(
             name=f"{self.post_name} — {self.file_size}",
-            value=f"——————————————————\n🔒 *VIP link hidden*\n\n**Decryption Key:** `{self.key}`\n——————————————————",
+            value=f"——————————————————\n🔗 **VIP Link:** ||{self.link}||\n\n**Decryption Key:** `{self.key}`\n——————————————————",
             inline=False
         )
-
-        view = RevealLinkView()
 
         if isinstance(channel, discord.ForumChannel):
             thread, _ = await channel.create_thread(
                 name=f"{self.post_name} — {self.file_size}",
                 embed=embed,
-                view=view
             )
-            await save_link(thread.id, self.link)
         else:
-            msg = await channel.send(embed=embed, view=view)
-            await save_link(msg.id, self.link)
+            await channel.send(embed=embed)
 
         await interaction.response.send_message("✅ Posted successfully!", ephemeral=True)
 
@@ -446,26 +441,21 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
             embed.set_image(url=image_urls[0])
             embed.add_field(
                 name=folder_name,
-                value=f"——————————————————\n🔒 *VIP link hidden*\n\n**Decryption Key:** `{key}`\n——————————————————",
+                value=f"——————————————————\n🔗 **VIP Link:** ||{mega_link}||\n\n**Decryption Key:** `{key}`\n——————————————————",
                 inline=False
             )
-
-            view = RevealLinkView()
 
             if isinstance(channel, discord.ForumChannel):
                 thread, _ = await channel.create_thread(
                     name=folder_name,
                     embed=embed,
-                    view=view
                 )
-                await save_link(thread.id, mega_link)
                 async with db_pool.acquire() as conn:
                     await conn.execute('INSERT INTO posted_names (name) VALUES ($1) ON CONFLICT DO NOTHING', folder_name)
                 for extra_url in image_urls[1:]:
                     await thread.send(extra_url)
             else:
-                msg = await channel.send(embed=embed, view=view)
-                await save_link(msg.id, mega_link)
+                await channel.send(embed=embed)
                 async with db_pool.acquire() as conn:
                     await conn.execute('INSERT INTO posted_names (name) VALUES ($1) ON CONFLICT DO NOTHING', folder_name)
                 for extra_url in image_urls[1:]:
@@ -507,6 +497,73 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
 
     for i, chunk in enumerate(chunks):
         await interaction.followup.send(chunk, ephemeral=True)
+
+@tree.command(name="migrate-spoiler", description="기존 포스트 전부 스포일러 링크로 일괄 변환 (관리자 전용)")
+async def migrate_spoiler(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    success = skipped = failed = 0
+
+    for channel_id in CHANNEL_MAP.values():
+        channel = client.get_channel(channel_id)
+        if not channel or not isinstance(channel, discord.ForumChannel):
+            continue
+
+        all_threads = list(channel.threads)
+        async for thread in channel.archived_threads(limit=None):
+            all_threads.append(thread)
+
+        for thread in all_threads:
+            try:
+                link = await get_link(thread.id)
+                if not link:
+                    skipped += 1
+                    continue
+
+                bot_msg = None
+                async for msg in thread.history(limit=10, oldest_first=True):
+                    if msg.author == client.user and msg.embeds:
+                        bot_msg = msg
+                        break
+
+                if not bot_msg:
+                    skipped += 1
+                    continue
+
+                embed = bot_msg.embeds[0]
+                if not embed.fields:
+                    skipped += 1
+                    continue
+
+                # 이미 스포일러로 변환된 경우 스킵
+                if '||' in embed.fields[0].value:
+                    skipped += 1
+                    continue
+
+                new_embed = embed.copy()
+                new_embed.clear_fields()
+                for field in embed.fields:
+                    new_value = field.value.replace(
+                        '🔒 *VIP link hidden*',
+                        f'🔗 **VIP Link:** ||{link}||'
+                    )
+                    new_embed.add_field(name=field.name, value=new_value, inline=field.inline)
+
+                await bot_msg.edit(embed=new_embed, view=None)
+                success += 1
+
+            except Exception as e:
+                print(f"[Migrate] thread {thread.id} 오류: {e}")
+                failed += 1
+
+    await interaction.followup.send(
+        f"✅ **Migration 완료**\n✅ 성공: {success}\n⏭️ 스킵: {skipped}\n❌ 실패: {failed}",
+        ephemeral=True
+    )
+
 
 @tree.command(name="setup-post", description="관리자용 포스팅 버튼 설정")
 async def setup_post(interaction: discord.Interaction):
