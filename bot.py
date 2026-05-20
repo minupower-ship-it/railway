@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord import app_commands
 from discord.ext import tasks
@@ -554,6 +555,7 @@ async def migrate_spoiler(interaction: discord.Interaction):
 
                 await bot_msg.edit(embed=new_embed, view=None)
                 success += 1
+                await asyncio.sleep(1.5)  # rate limit 방지
 
             except Exception as e:
                 print(f"[Migrate] thread {thread.id} 오류: {e}")
