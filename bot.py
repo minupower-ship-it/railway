@@ -499,13 +499,7 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
     for i, chunk in enumerate(chunks):
         await interaction.followup.send(chunk, ephemeral=True)
 
-@tree.command(name="migrate-spoiler", description="기존 포스트 전부 스포일러 링크로 일괄 변환 (관리자 전용)")
-async def migrate_spoiler(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-
+async def _run_migrate(notify_channel_id: int, notify_user_id: int):
     success = skipped = failed = 0
 
     for channel_id in CHANNEL_MAP.values():
@@ -516,13 +510,14 @@ async def migrate_spoiler(interaction: discord.Interaction):
         all_threads = list(channel.threads)
         async for thread in channel.archived_threads(limit=None):
             all_threads.append(thread)
+            await asyncio.sleep(1)  # 아카이브 페이지네이션 딜레이
 
         for thread in all_threads:
             try:
                 link = await get_link(thread.id)
                 if not link:
                     skipped += 1
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(3)
                     continue
 
                 bot_msg = None
@@ -530,14 +525,14 @@ async def migrate_spoiler(interaction: discord.Interaction):
                     if msg.author == client.user and msg.embeds:
                         bot_msg = msg
                         break
-                await asyncio.sleep(1)  # history 조회 후 딜레이
+                await asyncio.sleep(3)
 
-                if not bot_msg:
+                if not bot_msg or not bot_msg.embeds or not bot_msg.embeds[0].fields:
                     skipped += 1
                     continue
 
                 embed = bot_msg.embeds[0]
-                if not embed.fields or '||' in embed.fields[0].value:
+                if '||' in embed.fields[0].value:
                     skipped += 1
                     continue
 
@@ -552,23 +547,41 @@ async def migrate_spoiler(interaction: discord.Interaction):
 
                 await bot_msg.edit(embed=new_embed, view=None)
                 success += 1
-                await asyncio.sleep(2)  # edit 후 딜레이
+                print(f"[Migrate] ✅ {thread.name} ({success}번째)")
+                await asyncio.sleep(10)  # edit 후 넉넉하게 대기
 
             except discord.HTTPException as e:
                 if e.status == 429:
-                    retry_after = e.response.headers.get('Retry-After', 5)
-                    print(f"[Migrate] Rate limited, {retry_after}초 대기")
-                    await asyncio.sleep(float(retry_after) + 1)
+                    retry_after = float(getattr(e, 'retry_after', 10))
+                    print(f"[Migrate] Rate limited — {retry_after}초 대기")
+                    await asyncio.sleep(retry_after + 5)
                     failed += 1
                 else:
                     print(f"[Migrate] thread {thread.id} 오류: {e}")
                     failed += 1
+                    await asyncio.sleep(3)
             except Exception as e:
                 print(f"[Migrate] thread {thread.id} 오류: {e}")
                 failed += 1
+                await asyncio.sleep(3)
 
-    await interaction.followup.send(
-        f"✅ **Migration 완료**\n✅ 성공: {success}\n⏭️ 스킵: {skipped}\n❌ 실패: {failed}",
+    # 완료 후 실행자에게 DM 전송
+    try:
+        user = await client.fetch_user(notify_user_id)
+        await user.send(f"✅ **Migration 완료**\n✅ 성공: {success}\n⏭️ 스킵: {skipped}\n❌ 실패: {failed}")
+    except Exception:
+        pass
+    print(f"[Migrate] 완료 — 성공: {success}, 스킵: {skipped}, 실패: {failed}")
+
+
+@tree.command(name="migrate-spoiler", description="기존 포스트 전부 스포일러 링크로 일괄 변환 (관리자 전용, 백그라운드 실행)")
+async def migrate_spoiler(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    asyncio.create_task(_run_migrate(interaction.channel_id, interaction.user.id))
+    await interaction.response.send_message(
+        "⚙️ Migration 시작됨! 백그라운드에서 10초 간격으로 처리 중...\n완료되면 DM으로 결과 전송해줄게.",
         ephemeral=True
     )
 
