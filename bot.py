@@ -520,43 +520,20 @@ async def _run_migrate(notify_channel_id: int, notify_user_id: int):
                     await asyncio.sleep(3)
                     continue
 
-                bot_msg = None
-                async for msg in thread.history(limit=10, oldest_first=True):
-                    if msg.author == client.user and msg.embeds:
-                        bot_msg = msg
+                # 이미 링크 메시지가 전송된 스레드인지 확인
+                already_done = False
+                async for msg in thread.history(limit=20):
+                    if msg.author == client.user and '||' in (msg.content or ''):
+                        already_done = True
                         break
-                await asyncio.sleep(3)
+                await asyncio.sleep(1)
 
-                if not bot_msg or not bot_msg.embeds or not bot_msg.embeds[0].fields:
+                if already_done:
                     skipped += 1
                     continue
 
-                embed = bot_msg.embeds[0]
-                if embed.fields and '||' in embed.fields[0].value:
-                    skipped += 1
-                    continue
-
-                # embed.copy() 대신 처음부터 빌드 (필드 유실 방지)
-                new_embed = discord.Embed(color=embed.color or 0x2b2d31)
-                if embed.image and embed.image.url:
-                    new_embed.set_image(url=embed.image.url)
-
-                if embed.fields:
-                    for field in embed.fields:
-                        new_value = field.value.replace(
-                            '🔒 *VIP link hidden*',
-                            f'🔗 **VIP Link:** ||{link}||'
-                        )
-                        new_embed.add_field(name=field.name, value=new_value, inline=field.inline)
-                else:
-                    # 필드가 없는 구버전 포스트 — 링크 필드만 추가
-                    new_embed.add_field(
-                        name="VIP Link",
-                        value=f"——————————————————\n🔗 **VIP Link:** ||{link}||\n——————————————————",
-                        inline=False
-                    )
-
-                await bot_msg.edit(embed=new_embed, view=None)
+                # 임베드 수정 대신 스레드에 링크 메시지 전송
+                await thread.send(f"🔗 **VIP Link:** ||{link}||")
                 success += 1
                 print(f"[Migrate] ✅ {thread.name} ({success}번째)")
                 await asyncio.sleep(10)  # edit 후 넉넉하게 대기
