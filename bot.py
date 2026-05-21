@@ -532,18 +532,29 @@ async def _run_migrate(notify_channel_id: int, notify_user_id: int):
                     continue
 
                 embed = bot_msg.embeds[0]
-                if '||' in embed.fields[0].value:
+                if embed.fields and '||' in embed.fields[0].value:
                     skipped += 1
                     continue
 
-                new_embed = embed.copy()
-                new_embed.clear_fields()
-                for field in embed.fields:
-                    new_value = field.value.replace(
-                        '🔒 *VIP link hidden*',
-                        f'🔗 **VIP Link:** ||{link}||'
+                # embed.copy() 대신 처음부터 빌드 (필드 유실 방지)
+                new_embed = discord.Embed(color=embed.color or 0x2b2d31)
+                if embed.image and embed.image.url:
+                    new_embed.set_image(url=embed.image.url)
+
+                if embed.fields:
+                    for field in embed.fields:
+                        new_value = field.value.replace(
+                            '🔒 *VIP link hidden*',
+                            f'🔗 **VIP Link:** ||{link}||'
+                        )
+                        new_embed.add_field(name=field.name, value=new_value, inline=field.inline)
+                else:
+                    # 필드가 없는 구버전 포스트 — 링크 필드만 추가
+                    new_embed.add_field(
+                        name="VIP Link",
+                        value=f"——————————————————\n🔗 **VIP Link:** ||{link}||\n——————————————————",
+                        inline=False
                     )
-                    new_embed.add_field(name=field.name, value=new_value, inline=field.inline)
 
                 await bot_msg.edit(embed=new_embed, view=None)
                 success += 1
