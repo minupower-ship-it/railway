@@ -646,6 +646,8 @@ async def _run_update_links(rows, notify_channel_id, notify_user_id):
                     spoiler_msg = msg
 
             new_content = f"🔗 **VIP Link:** ||{new_link}||"
+            if key:
+                new_content += f"\n**Decryption Key:** `{key}`"
             if spoiler_msg:
                 await spoiler_msg.edit(content=new_content)
             else:
@@ -660,7 +662,7 @@ async def _run_update_links(rows, notify_channel_id, notify_user_id):
                 for field in embed.fields:
                     new_value = field.value
                     new_value = re.sub(r'\|\|https://mega\.nz/[^\|]+\|\|', f'||{new_link}||', new_value)
-                    new_value = re.sub(r'`[A-Za-z0-9_\-]{10,}`', f'`{key}`', new_value)
+                    new_value = re.sub(r'\*\*Decryption Key:\*\*\s*`[^`]*`', f'**Decryption Key:** `{key}`', new_value)
                     new_embed.add_field(name=field.name, value=new_value, inline=field.inline)
                 if new_embed.fields:
                     await embed_msg.edit(embed=new_embed)
