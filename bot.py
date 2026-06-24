@@ -590,13 +590,16 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
         await interaction.followup.send(f"❌ 파일 읽기 실패: {e}", ephemeral=True)
         return
 
-    # A:이름 B:링크 파싱
+    # A:이름 B:링크 파싱 (헤더 자동 스킵)
     rows = []
-    for row in ws.iter_rows(min_row=2, values_only=True):
+    for row in ws.iter_rows(min_row=1, values_only=True):
         name = str(row[0]).strip() if row[0] else ""
         link = str(row[1]).strip() if len(row) > 1 and row[1] else ""
-        if name and link:
-            rows.append((name, link))
+        if not name or not link:
+            continue
+        if name.lower() == 'name' or 'mega.nz' not in link:
+            continue
+        rows.append((name, link))
 
     if not rows:
         await interaction.followup.send("❌ 유효한 행이 없어. A열: 이름, B열: 링크 확인해줘.", ephemeral=True)
