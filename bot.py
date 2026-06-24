@@ -1,4 +1,5 @@
 import asyncio
+import re
 import discord
 from discord import app_commands
 from discord.ext import tasks
@@ -629,26 +630,46 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
             continue
 
         try:
-            # 봇이 보낸 스포일러 메시지 찾기
-            target_msg = None
-            async for msg in matched.history(limit=30):
-                if msg.author == client.user and '||' in (msg.content or ''):
-                    target_msg = msg
-                    break
+            embed_msg = None
+            spoiler_msg = None
+            async for msg in matched.history(limit=30, oldest_first=True):
+                if msg.author != client.user:
+                    continue
+                if msg.embeds and embed_msg is None:
+                    embed_msg = msg
+                if '||' in (msg.content or '') and spoiler_msg is None:
+                    spoiler_msg = msg
             await asyncio.sleep(1)
 
+            # 1. 스포일러 메시지 수정 (또는 신규 전송)
             new_content = f"🔗 **VIP Link:** ||{new_link}||"
-
-            if target_msg:
-                await target_msg.edit(content=new_content)
+            if spoiler_msg:
+                await spoiler_msg.edit(content=new_content)
             else:
-                # 스포일러 메시지 없으면 새로 전송
                 await matched.send(new_content)
+            await asyncio.sleep(1)
+
+            # 2. 원본 임베드의 링크 + Key 수정
+            if embed_msg and embed_msg.embeds:
+                embed = embed_msg.embeds[0]
+                new_embed = discord.Embed(color=embed.color or 0x2b2d31)
+                if embed.image and embed.image.url:
+                    new_embed.set_image(url=embed.image.url)
+                for field in embed.fields:
+                    new_value = field.value
+                    # VIP Link 교체
+                    new_value = re.sub(r'\|\|https://mega\.nz/[^\|]+\|\|', f'||{new_link}||', new_value)
+                    # Decryption Key 교체
+                    new_value = re.sub(r'`[A-Za-z0-9_\-]{10,}`', f'`{key}`', new_value)
+                    new_embed.add_field(name=field.name, value=new_value, inline=field.inline)
+                if new_embed.fields:
+                    await embed_msg.edit(embed=new_embed)
+                    await asyncio.sleep(1)
 
             # DB도 업데이트
             await save_link(matched.id, new_link)
             success_list.append(f"✅ `{name}`")
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(1)
 
         except Exception as e:
             fail_list.append(f"❌ `{name}` — {e}")
