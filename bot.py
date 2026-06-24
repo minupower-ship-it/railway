@@ -574,6 +574,102 @@ async def migrate_spoiler(interaction: discord.Interaction):
     )
 
 
+@tree.command(name="update-links", description="엑셀로 Mega 링크 일괄 수정 (A:이름 B:새링크)")
+async def update_links(interaction: discord.Interaction, file: discord.Attachment):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        file_bytes = await file.read()
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
+        ws = wb.active
+    except Exception as e:
+        await interaction.followup.send(f"❌ 파일 읽기 실패: {e}", ephemeral=True)
+        return
+
+    # A:이름 B:링크 파싱
+    rows = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        name = str(row[0]).strip() if row[0] else ""
+        link = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+        if name and link:
+            rows.append((name, link))
+
+    if not rows:
+        await interaction.followup.send("❌ 유효한 행이 없어. A열: 이름, B열: 링크 확인해줘.", ephemeral=True)
+        return
+
+    # 모든 포럼 채널 스레드 이름 → thread 매핑 빌드
+    thread_map = {}
+    for channel_id in CHANNEL_MAP.values():
+        channel = client.get_channel(channel_id)
+        if not channel or not isinstance(channel, discord.ForumChannel):
+            continue
+        for thread in channel.threads:
+            thread_map[thread.name.lower()] = thread
+        async for thread in channel.archived_threads(limit=None):
+            thread_map[thread.name.lower()] = thread
+
+    success_list = []
+    fail_list = []
+
+    for name, new_link in rows:
+        key = new_link.split('#')[-1] if '#' in new_link else ""
+        # 이름으로 스레드 찾기 (앞부분 일치)
+        matched = None
+        for tname, thread in thread_map.items():
+            if tname.startswith(name.lower()):
+                matched = thread
+                break
+
+        if not matched:
+            fail_list.append(f"❌ `{name}` — 스레드를 찾을 수 없음")
+            continue
+
+        try:
+            # 봇이 보낸 스포일러 메시지 찾기
+            target_msg = None
+            async for msg in matched.history(limit=30):
+                if msg.author == client.user and '||' in (msg.content or ''):
+                    target_msg = msg
+                    break
+            await asyncio.sleep(1)
+
+            new_content = f"🔗 **VIP Link:** ||{new_link}||"
+
+            if target_msg:
+                await target_msg.edit(content=new_content)
+            else:
+                # 스포일러 메시지 없으면 새로 전송
+                await matched.send(new_content)
+
+            # DB도 업데이트
+            await save_link(matched.id, new_link)
+            success_list.append(f"✅ `{name}`")
+            await asyncio.sleep(1.5)
+
+        except Exception as e:
+            fail_list.append(f"❌ `{name}` — {e}")
+
+    report = f"📊 **Update Links Report**\n\n"
+    if success_list:
+        report += f"✅ **성공 ({len(success_list)}):**\n" + "\n".join(success_list) + "\n\n"
+    if fail_list:
+        report += f"❌ **실패 ({len(fail_list)}):**\n" + "\n".join(fail_list)
+
+    chunks = []
+    while len(report) > 1900:
+        split_at = report.rfind('\n', 0, 1900)
+        if split_at == -1: split_at = 1900
+        chunks.append(report[:split_at])
+        report = report[split_at:].lstrip('\n')
+    chunks.append(report)
+    for chunk in chunks:
+        await interaction.followup.send(chunk, ephemeral=True)
+
+
 @tree.command(name="setup-post", description="관리자용 포스팅 버튼 설정")
 async def setup_post(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
