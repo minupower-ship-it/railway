@@ -204,7 +204,7 @@ class RequestButtonView(discord.ui.View):
 @tree.command(name="setup-request", description="request-form 채널에 버튼 설정")
 async def setup_request(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     embed = discord.Embed(title="Welcome to #request-form!", description="Submit your content requests here.", color=0x2b2d31)
     embed.add_field(name="Request Any Model You Want", value="Want access to exclusive content?\n\nGet premium access at **xhouse.vip** and unlock:\n• Unlimited model requests\n• Exclusive content library\n• Priority updates", inline=False)
@@ -267,7 +267,7 @@ class PaymentView(discord.ui.View):
 @tree.command(name="setup-payment", description="결제 버튼 설정")
 async def setup_payment(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     embed = discord.Embed(
         title="💎 X-House Membership",
@@ -560,7 +560,7 @@ class PostButtonView(discord.ui.View):
     @discord.ui.button(label="New Post", style=discord.ButtonStyle.success, emoji="📤", custom_id="new_post")
     async def new_post(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
+            await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
             return
         await interaction.response.send_modal(PostModal())
 
@@ -941,7 +941,7 @@ async def _run_update_links(rows, notify_channel_id, notify_user_id):
 @tree.command(name="setup-post", description="관리자용 포스팅 버튼 설정")
 async def setup_post(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     embed = discord.Embed(title="📤 Content Post Panel", description="Click the button below to post new content.", color=0x2b2d31)
     view = PostButtonView()
@@ -952,7 +952,7 @@ async def setup_post(interaction: discord.Interaction):
 @tree.command(name="set-link", description="기존 포스트에 링크 등록 (관리자 전용)")
 async def set_link(interaction: discord.Interaction, thread_id: str, link: str):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     await save_link(int(thread_id), link)
     await interaction.response.send_message(f"✅ Link saved for thread `{thread_id}`!", ephemeral=True)
@@ -1058,7 +1058,7 @@ class SupportPanelView(discord.ui.View):
 @tree.command(name="setup-support", description="Support & Review 패널 설정")
 async def setup_support(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ 관리자 권한이 필요합니다.", ephemeral=True)
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
 
     embed = discord.Embed(
