@@ -624,6 +624,12 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
             continue
 
         try:
+            # 아카이브된 스레드면 임시로 언아카이브
+            was_archived = getattr(matched, 'archived', False)
+            if was_archived:
+                await matched.edit(archived=False)
+                await asyncio.sleep(0.5)
+
             embed_msg = None
             spoiler_msg = None
             async for msg in matched.history(limit=30, oldest_first=True):
@@ -633,7 +639,6 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
                     embed_msg = msg
                 if '||' in (msg.content or '') and spoiler_msg is None:
                     spoiler_msg = msg
-            await asyncio.sleep(1)
 
             # 1. 스포일러 메시지 수정 (또는 신규 전송)
             new_content = f"🔗 **VIP Link:** ||{new_link}||"
@@ -641,7 +646,7 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
                 await spoiler_msg.edit(content=new_content)
             else:
                 await matched.send(new_content)
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
 
             # 2. 원본 임베드의 링크 + Key 수정
             if embed_msg and embed_msg.embeds:
@@ -651,19 +656,22 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
                     new_embed.set_image(url=embed.image.url)
                 for field in embed.fields:
                     new_value = field.value
-                    # VIP Link 교체
                     new_value = re.sub(r'\|\|https://mega\.nz/[^\|]+\|\|', f'||{new_link}||', new_value)
-                    # Decryption Key 교체
                     new_value = re.sub(r'`[A-Za-z0-9_\-]{10,}`', f'`{key}`', new_value)
                     new_embed.add_field(name=field.name, value=new_value, inline=field.inline)
                 if new_embed.fields:
                     await embed_msg.edit(embed=new_embed)
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.5)
 
             # DB도 업데이트
             await save_link(matched.id, new_link)
+
+            # 다시 아카이브
+            if was_archived:
+                await matched.edit(archived=True)
+
             success_list.append(f"✅ `{name}`")
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
 
         except Exception as e:
             fail_list.append(f"❌ `{name}` — {e}")
