@@ -28,8 +28,10 @@ TX_CHANNEL_ID       = int(os.getenv('XHOUSE_TX_CHANNEL_ID', '1486794773263024309
 db_pool      = None
 invite_cache = {}  # {guild_id: {invite_code: uses}}
 
-XHOUSE_GUILD_ID_INT = int(os.getenv('XHOUSE_GUILD_ID', '0'))
-XHOUSE_ROLE_ID_INT  = int(os.getenv('XHOUSE_ROLE_ID',  '0'))
+XHOUSE_GUILD_ID_INT  = int(os.getenv('XHOUSE_GUILD_ID', '0'))
+XHOUSE_ROLE_ID_INT   = int(os.getenv('XHOUSE_ROLE_ID',  '0'))
+VIP_ROLE_ID_INT      = int(os.getenv('XHOUSE_VIP_ROLE_ID', '1519415094235365386'))
+VIP_WINDOW_SIZE      = 20  # 채널당 최신 N개 = VIP 전용
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -51,8 +53,9 @@ CHANNELS = {
 CHANNEL_MAP = {
     "asian":    1487319260228358174,  # 🇦🇸🇮🇦🇳-🇴🇹🇭🇪🇷🇸
     "hispanic": 1487319298681864342,  # 🇭🇮🇸🇵🇦🇳🇮🇨
-    "white":    1487319326204625047,  # 🇧‌🇱‌🇦‌🇨‌🇰‌
+    "white":    1487319326204625047,  # 🇼🇭🇮🇹🇪
     "black":    1487319363265626173,  # 🇧🇱🇦🇨🇰
+    "collabs":  1489310534544265376,  # 🇨🇴🇱🇱🇦🇧s
 }
 
 # ================== DB 초기화 ==================
@@ -66,6 +69,7 @@ async def init_db():
                 mega_link TEXT NOT NULL
             )
         ''')
+        await conn.execute('ALTER TABLE links ADD COLUMN IF NOT EXISTS vip BOOLEAN DEFAULT FALSE')
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS posted_names (
                 name TEXT PRIMARY KEY
@@ -313,10 +317,15 @@ class ChannelSelect(discord.ui.Select):
                 name=f"{self.post_name} — {self.file_size}",
                 embed=embed,
             )
+            await save_link(thread.id, self.link)
+            await interaction.response.send_message("✅ Posted! Applying VIP window...", ephemeral=True)
+            try:
+                await reconcile_vip_window(channel)
+            except Exception as e:
+                print(f"[VIP reconcile] {e}")
         else:
             await channel.send(embed=embed)
-
-        await interaction.response.send_message("✅ Posted successfully!", ephemeral=True)
+            await interaction.response.send_message("✅ Posted successfully!", ephemeral=True)
 
 
 class RevealLinkView(discord.ui.View):
@@ -335,6 +344,192 @@ class RevealLinkView(discord.ui.View):
             await interaction.followup.send(f"🔗 **Your VIP link:**\n{link}", ephemeral=True)
         else:
             await interaction.followup.send("❌ Link not found. Please contact an admin.", ephemeral=True)
+
+
+class VIPRevealView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Reveal Link (VIP Only)", style=discord.ButtonStyle.primary, emoji="🔒", custom_id="vip_reveal")
+    async def reveal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        member = interaction.user
+        has_vip = isinstance(member, discord.Member) and any(r.id == VIP_ROLE_ID_INT for r in member.roles)
+        if not has_vip:
+            await interaction.response.send_message(
+                "🔒 This content is **VIP exclusive**.\nUpgrade to **VIP** at **xhouse.vip** to unlock the latest drops.",
+                ephemeral=True
+            )
+            return
+        link = await get_link(interaction.channel_id)
+        if not link:
+            link = await get_link(interaction.message.id)
+        if link:
+            key = link.split('#')[-1] if '#' in link else ''
+            await interaction.response.send_message(
+                f"🔗 **Your VIP link:**\n{link}\n\n**Decryption Key:** `{key}`",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message("❌ Link not found. Please contact an admin.", ephemeral=True)
+
+
+# ── VIP 롤링 윈도우 헬퍼 ──
+def _extract_link_key(value: str):
+    """embed 필드 값에서 mega 링크와 키 추출"""
+    link_m = re.search(r'\|\|(https://mega\.nz/[^\|]+)\|\|', value or '')
+    key_m  = re.search(r'\*\*Decryption Key:\*\*\s*`([^`]+)`', value or '')
+    link = link_m.group(1) if link_m else None
+    key  = key_m.group(1) if key_m else (link.split('#')[-1] if link and '#' in link else '')
+    return link, key
+
+
+async def set_post_vip(thread: discord.Thread, vip: bool):
+    """포스트를 VIP(버튼) 또는 공개(스포일러) 상태로 전환"""
+    # 아카이브된 경우 임시 언아카이브
+    was_archived = getattr(thread, 'archived', False)
+    if was_archived:
+        try:
+            await thread.edit(archived=False)
+            await asyncio.sleep(0.4)
+        except Exception as e:
+            return False, f"unarchive 실패: {e}"
+
+    # 시작 메시지(임베드) + 별도 스포일러 메시지 수집
+    starter = None
+    try:
+        starter = await thread.fetch_message(thread.id)
+    except Exception:
+        pass
+    spoiler_msgs = []
+    async for m in thread.history(limit=30, oldest_first=True):
+        if m.author != client.user:
+            continue
+        if starter is None and m.embeds:
+            starter = m
+        if '||' in (m.content or '') and 'mega.nz' in (m.content or ''):
+            spoiler_msgs.append(m)
+
+    if not starter or not starter.embeds:
+        return False, "임베드 메시지 없음"
+
+    embed = starter.embeds[0]
+    field = embed.fields[0] if embed.fields else None
+    field_name = field.name if field else thread.name
+
+    # 링크/키 확보: DB → 임베드 필드 → 별도 스포일러 메시지 순
+    link = await get_link(thread.id)
+    fkey = ''
+    if field:
+        flink, fkey = _extract_link_key(field.value)
+        if not link:
+            link = flink
+    if not link:
+        for sm in spoiler_msgs:
+            slink, skey = _extract_link_key(sm.content)
+            if slink:
+                link = slink
+                fkey = fkey or skey
+                break
+    if link:
+        await save_link(thread.id, link)
+    key = fkey or (link.split('#')[-1] if link and '#' in link else '')
+
+    new_embed = discord.Embed(color=embed.color or 0x2b2d31)
+    if embed.image and embed.image.url:
+        new_embed.set_image(url=embed.image.url)
+
+    if vip:
+        new_value = (
+            "——————————————————\n"
+            "🔒 **VIP EXCLUSIVE**\n"
+            "This drop is available to **VIP members** only.\n"
+            "Tap the button below to unlock (VIP role required).\n"
+            "Not VIP yet? Upgrade at **xhouse.vip**\n"
+            "——————————————————"
+        )
+        new_embed.add_field(name=field_name, value=new_value, inline=False)
+        await starter.edit(embed=new_embed, view=VIPRevealView())
+        # 링크 노출되는 별도 스포일러 메시지 제거
+        for sm in spoiler_msgs:
+            if sm.id != starter.id:
+                try:
+                    await sm.delete()
+                    await asyncio.sleep(0.3)
+                except Exception:
+                    pass
+    else:
+        if not link:
+            return False, "복원할 링크 없음"
+        new_value = (
+            "——————————————————\n"
+            f"🔗 **VIP Link:** ||{link}||\n\n"
+            f"**Decryption Key:** `{key}`\n"
+            "——————————————————"
+        )
+        new_embed.add_field(name=field_name, value=new_value, inline=False)
+        await starter.edit(embed=new_embed, view=None)
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            'INSERT INTO links (thread_id, mega_link, vip) VALUES ($1, $2, $3) '
+            'ON CONFLICT (thread_id) DO UPDATE SET vip = $3',
+            thread.id, link or '', vip
+        )
+    return True, "ok"
+
+
+async def reconcile_vip_window(channel: discord.ForumChannel, limit: int = VIP_WINDOW_SIZE, deep: bool = False):
+    """채널의 최신 limit개를 VIP로, 그 외 기존 VIP는 공개로 전환"""
+    threads = {t.id: t for t in channel.threads}
+    if deep:
+        try:
+            async for t in channel.archived_threads(limit=200):
+                threads[t.id] = t
+                await asyncio.sleep(0.4)
+        except Exception:
+            pass
+
+    ordered = sorted(threads.values(), key=lambda t: t.id, reverse=True)
+    vip_set = set(t.id for t in ordered[:limit])
+    by_id   = {t.id: t for t in ordered}
+
+    changes = []
+
+    # 1) 최신 limit개 → VIP (아직 아니면)
+    for t in ordered[:limit]:
+        async with db_pool.acquire() as conn:
+            r = await conn.fetchrow('SELECT vip FROM links WHERE thread_id=$1', t.id)
+        if r and r['vip']:
+            continue
+        ok, _ = await set_post_vip(t, True)
+        if ok:
+            changes.append((t.id, True))
+        await asyncio.sleep(1)
+
+    # 2) 현재 VIP인데 윈도우 밖으로 밀린 것 → 공개
+    async with db_pool.acquire() as conn:
+        vip_rows = await conn.fetch('SELECT thread_id FROM links WHERE vip = TRUE')
+    for row in vip_rows:
+        tid = row['thread_id']
+        if tid in vip_set:
+            continue
+        thread = by_id.get(tid)
+        if thread is None:
+            try:
+                thread = await client.fetch_channel(tid)
+            except Exception:
+                # 스레드 삭제됨 → 플래그만 정리
+                async with db_pool.acquire() as conn:
+                    await conn.execute('UPDATE links SET vip = FALSE WHERE thread_id=$1', tid)
+                continue
+        if getattr(thread, 'parent_id', None) != channel.id:
+            continue
+        ok, _ = await set_post_vip(thread, False)
+        if ok:
+            changes.append((tid, False))
+        await asyncio.sleep(1)
+
+    return changes
 
 
 class PostButtonView(discord.ui.View):
@@ -419,6 +614,7 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
     success_list = []
     fail_list    = []
     skip_list    = []
+    posted_channels = set()
 
     for item in parsed:
         folder_name = item["folder_name"]
@@ -452,6 +648,8 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
                     name=folder_name,
                     embed=embed,
                 )
+                await save_link(thread.id, mega_link)
+                posted_channels.add(channel.id)
                 async with db_pool.acquire() as conn:
                     await conn.execute('INSERT INTO posted_names (name) VALUES ($1) ON CONFLICT DO NOTHING', folder_name)
                 for extra_url in image_urls[1:]:
@@ -467,6 +665,15 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
 
         except Exception as e:
             fail_list.append(f"❌ `{folder_name}` — {str(e)}")
+
+    # VIP 윈도우 재조정 (포스팅된 채널만)
+    for ch_id in posted_channels:
+        ch = client.get_channel(ch_id)
+        if isinstance(ch, discord.ForumChannel):
+            try:
+                await reconcile_vip_window(ch)
+            except Exception as e:
+                print(f"[VIP reconcile] {ch_id}: {e}")
 
     # 리포트
     report = f"📊 **Auto-Post Report**\n\n"
@@ -630,6 +837,16 @@ async def _run_update_links(rows, notify_channel_id, notify_user_id):
             continue
 
         try:
+            # VIP 포스트는 링크가 공개 노출되면 안 됨 → DB만 갱신하고 VIP 상태 유지
+            async with db_pool.acquire() as conn:
+                vrow = await conn.fetchrow('SELECT vip FROM links WHERE thread_id=$1', matched.id)
+            if vrow and vrow['vip']:
+                await save_link(matched.id, new_link)
+                await set_post_vip(matched, True)  # 임베드(이미지/제목)·버튼 갱신, 링크는 DB로만
+                success_list.append(f"✅ `{name}` (VIP)")
+                await asyncio.sleep(0.5)
+                continue
+
             was_archived = getattr(matched, 'archived', False)
             if was_archived:
                 await matched.edit(archived=False)
@@ -994,6 +1211,67 @@ async def on_member_join(member: discord.Member):
         print(f"[Join] Promoter source 기록: {member} → {promo_row['promoter']}")
 
 
+# ================== VIP 윈도우 명령어 ==================
+@tree.command(name="setup-vip-window", description="모든 채널 최신 20개를 VIP 전용으로 설정 (롤링 윈도우 초기화)")
+async def setup_vip_window(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    asyncio.create_task(_run_setup_vip_window(interaction.user.id))
+    await interaction.followup.send(
+        f"⚙️ VIP 윈도우 설정 시작! 각 채널 최신 {VIP_WINDOW_SIZE}개를 VIP 전용으로 전환 중...\n완료되면 DM으로 결과 보낼게.",
+        ephemeral=True
+    )
+
+
+async def _run_setup_vip_window(notify_user_id: int):
+    report = "📊 **VIP Window Setup**\n\n"
+    for key, ch_id in CHANNEL_MAP.items():
+        channel = client.get_channel(ch_id)
+        if not isinstance(channel, discord.ForumChannel):
+            report += f"⚠️ `{key}` — 포럼 채널 아님/없음\n"
+            continue
+        try:
+            changes = await reconcile_vip_window(channel, deep=True)
+            promoted = sum(1 for _, v in changes if v)
+            demoted  = sum(1 for _, v in changes if not v)
+            report += f"✅ `{key}` — VIP +{promoted} / 공개전환 {demoted}\n"
+        except Exception as e:
+            report += f"❌ `{key}` — {e}\n"
+        await asyncio.sleep(1)
+
+    try:
+        user = await client.fetch_user(notify_user_id)
+        await user.send(report)
+    except Exception:
+        pass
+
+
+@tasks.loop(hours=6)
+async def keep_vip_unarchived():
+    """VIP 스레드가 아카이브되면 버튼이 안 먹으므로 주기적으로 깨움"""
+    if db_pool is None:
+        return
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch('SELECT thread_id FROM links WHERE vip = TRUE')
+    vip_ids = {r['thread_id'] for r in rows}
+    for ch_id in CHANNEL_MAP.values():
+        channel = client.get_channel(ch_id)
+        if not isinstance(channel, discord.ForumChannel):
+            continue
+        try:
+            async for thread in channel.archived_threads(limit=50):
+                if thread.id in vip_ids:
+                    try:
+                        await thread.edit(archived=False)
+                        await asyncio.sleep(1)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+
 # ================== 봇 시작 ==================
 @client.event
 async def on_ready():
@@ -1002,6 +1280,7 @@ async def on_ready():
     client.add_view(PostButtonView())
     client.add_view(PaymentView())
     client.add_view(RevealLinkView())
+    client.add_view(VIPRevealView())
     client.add_view(SupportPanelView())
     # ── 2. 이후 무거운 작업 처리 ──
     await init_db()
@@ -1014,6 +1293,8 @@ async def on_ready():
             pass
     await tree.sync()
     post_preview.start()
+    if not keep_vip_unarchived.is_running():
+        keep_vip_unarchived.start()
     print(f"✅ XHouse Bot 온라인! ({client.user})")
 
 client.run(TOKEN)
