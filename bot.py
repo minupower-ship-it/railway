@@ -167,6 +167,17 @@ async def get_link(thread_id: int) -> str:
         row = await conn.fetchrow('SELECT mega_link FROM links WHERE thread_id = $1', thread_id)
     return row['mega_link'] if row else None
 
+def member_tier_label(user) -> str:
+    """유저의 역할로 멤버 등급 자동 판별 (관리자용 표시)"""
+    if not isinstance(user, discord.Member):
+        return "❔ Unknown"
+    role_ids = {r.id for r in user.roles}
+    if VIP_ROLE_ID_INT in role_ids:
+        return "✨ VIP"
+    if XHOUSE_ROLE_ID_INT in role_ids:
+        return "👤 Member"
+    return "🚫 Non-member"
+
 # ================== Content Request ==================
 class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
     name    = discord.ui.TextInput(label="Name", placeholder="Creator name", required=True, max_length=100)
@@ -181,6 +192,7 @@ class ContentRequestModal(discord.ui.Modal, title="Content Request Form"):
         if request_channel:
             embed = discord.Embed(title="🆕 New Content Request", description="A new content request has been submitted!", color=0x9b59b6, timestamp=datetime.utcnow())
             embed.add_field(name="Requested By", value=f"{interaction.user.display_name}\n({interaction.user.name})", inline=True)
+            embed.add_field(name="Membership", value=member_tier_label(interaction.user), inline=True)
             embed.add_field(name="Name", value=self.name.value, inline=True)
             embed.add_field(name="Content Link", value=self.link.value, inline=False)
             if self.comment.value and self.comment.value.strip():
@@ -1063,6 +1075,7 @@ class SupportModal(discord.ui.Modal, title="Submit a Support Ticket"):
 
         embed = discord.Embed(title="🎫 New Support Ticket", color=0x5865f2, timestamp=datetime.utcnow())
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.add_field(name="Membership", value=member_tier_label(interaction.user), inline=False)
         embed.add_field(name="Subject", value=self.subject.value, inline=False)
         embed.add_field(name="Message", value=self.message.value, inline=False)
         embed.set_footer(text=f"{interaction.user} • {interaction.user.id}")
