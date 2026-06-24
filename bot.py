@@ -71,6 +71,7 @@ async def init_db():
         ''')
         await conn.execute('ALTER TABLE links ADD COLUMN IF NOT EXISTS vip BOOLEAN DEFAULT FALSE')
         await conn.execute('ALTER TABLE links ADD COLUMN IF NOT EXISTS channel_id BIGINT')
+        await conn.execute('ALTER TABLE links ADD COLUMN IF NOT EXISTS vip_locked BOOLEAN DEFAULT FALSE')
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS posted_names (
                 name TEXT PRIMARY KEY
@@ -509,10 +510,11 @@ async def reconcile_vip_window(channel: discord.ForumChannel, limit: int = VIP_W
             changes.append((t.id, True))
         await asyncio.sleep(1)
 
-    # 2) 현재 VIP인데 윈도우 밖으로 밀린 것 → 공개 (해당 채널만)
+    # 2) 현재 VIP인데 윈도우 밖으로 밀린 것 → 공개 (해당 채널만, 영구잠금 제외)
     async with db_pool.acquire() as conn:
         vip_rows = await conn.fetch(
-            'SELECT thread_id FROM links WHERE vip = TRUE AND channel_id = $1', channel.id
+            'SELECT thread_id FROM links WHERE vip = TRUE AND channel_id = $1 AND vip_locked IS NOT TRUE',
+            channel.id
         )
     for row in vip_rows:
         tid = row['thread_id']
@@ -1264,6 +1266,59 @@ async def _run_setup_vip_window(notify_user_id: int):
         await user.send(report)
     except Exception:
         pass
+
+
+@tree.command(name="vip-lock", description="특정 게시글을 영구 VIP 전용으로 고정 (최신20 윈도우와 무관하게 유지)")
+async def vip_lock(interaction: discord.Interaction, thread_id: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    tid = thread_id.strip().split('.')[0]
+    if not tid.isdigit():
+        await interaction.followup.send("❌ 스레드 ID는 숫자여야 해.", ephemeral=True)
+        return
+    try:
+        thread = await client.fetch_channel(int(tid))
+    except Exception as e:
+        await interaction.followup.send(f"❌ 스레드를 찾을 수 없어 (`{tid}`): {e}", ephemeral=True)
+        return
+    ok, msg = await set_post_vip(thread, True)
+    if not ok:
+        await interaction.followup.send(f"❌ VIP 전환 실패: {msg}", ephemeral=True)
+        return
+    async with db_pool.acquire() as conn:
+        await conn.execute('UPDATE links SET vip_locked = TRUE WHERE thread_id=$1', int(tid))
+    await interaction.followup.send(
+        f"🔒 `{getattr(thread, 'name', tid)}` 영구 VIP 고정됨. 최신 20개 윈도우와 상관없이 계속 VIP 전용으로 유지돼.",
+        ephemeral=True
+    )
+
+
+@tree.command(name="vip-unlock", description="영구 VIP 고정 해제 (다시 최신20 윈도우 규칙 적용)")
+async def vip_unlock(interaction: discord.Interaction, thread_id: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    tid = thread_id.strip().split('.')[0]
+    if not tid.isdigit():
+        await interaction.followup.send("❌ 스레드 ID는 숫자여야 해.", ephemeral=True)
+        return
+    async with db_pool.acquire() as conn:
+        await conn.execute('UPDATE links SET vip_locked = FALSE WHERE thread_id=$1', int(tid))
+    # 윈도우 밖이면 즉시 공개로 내려가도록 해당 채널 reconcile
+    try:
+        thread = await client.fetch_channel(int(tid))
+        channel = client.get_channel(getattr(thread, 'parent_id', 0))
+        if isinstance(channel, discord.ForumChannel):
+            asyncio.create_task(reconcile_vip_window(channel))
+    except Exception:
+        pass
+    await interaction.followup.send(
+        f"🔓 `{tid}` 영구 고정 해제됨. 최신 20개 안에 있으면 VIP 유지, 밖이면 곧 공개로 전환돼.",
+        ephemeral=True
+    )
 
 
 @tasks.loop(hours=6)
