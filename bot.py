@@ -324,26 +324,39 @@ class ChannelSelect(discord.ui.Select):
             await interaction.response.send_message("❌ Channel not found.", ephemeral=True)
             return
 
-        embed = discord.Embed(color=0x2b2d31)
-        embed.set_image(url=self.image_url)
-        embed.add_field(
-            name=f"{self.post_name} — {self.file_size}",
-            value=f"——————————————————\n🔗 **VIP Link:** ||{self.link}||\n\n**Decryption Key:** `{self.key}`\n——————————————————",
-            inline=False
-        )
-
         if isinstance(channel, discord.ForumChannel):
+            # 신규 글은 항상 최신 → 처음부터 VIP로 게시 (스포일러 노출 0)
+            vip_embed = discord.Embed(color=0x2b2d31)
+            vip_embed.set_image(url=self.image_url)
+            vip_embed.add_field(
+                name=f"{self.post_name} — {self.file_size}",
+                value="——————————————————\n🔒 **VIP EXCLUSIVE**\n——————————————————",
+                inline=False
+            )
             thread, _ = await channel.create_thread(
                 name=f"{self.post_name} — {self.file_size}",
-                embed=embed,
+                embed=vip_embed,
+                view=VIPRevealView(),
             )
-            await save_link(thread.id, self.link)
-            await interaction.response.send_message("✅ Posted! Applying VIP window...", ephemeral=True)
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    'INSERT INTO links (thread_id, mega_link, vip, channel_id) VALUES ($1, $2, TRUE, $3) '
+                    'ON CONFLICT (thread_id) DO UPDATE SET mega_link = $2, vip = TRUE, channel_id = $3',
+                    thread.id, self.link, channel.id
+                )
+            await interaction.response.send_message("✅ Posted as VIP! Updating window...", ephemeral=True)
             try:
                 await reconcile_vip_window(channel)
             except Exception as e:
                 print(f"[VIP reconcile] {e}")
         else:
+            embed = discord.Embed(color=0x2b2d31)
+            embed.set_image(url=self.image_url)
+            embed.add_field(
+                name=f"{self.post_name} — {self.file_size}",
+                value=f"——————————————————\n🔗 **VIP Link:** ||{self.link}||\n\n**Decryption Key:** `{self.key}`\n——————————————————",
+                inline=False
+            )
             await channel.send(embed=embed)
             await interaction.response.send_message("✅ Posted successfully!", ephemeral=True)
 
