@@ -607,6 +607,16 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
         await interaction.followup.send("❌ 유효한 행이 없어. B열: 링크, C열: 스레드ID 확인해줘.", ephemeral=True)
         return
 
+    notify_channel_id = interaction.channel_id
+    notify_user_id = interaction.user.id
+    asyncio.create_task(_run_update_links(rows, notify_channel_id, notify_user_id))
+    await interaction.followup.send(
+        f"⚙️ Update Links 시작! 백그라운드에서 {len(rows)}개 처리 중...\n완료되면 DM으로 결과 전송해줄게.",
+        ephemeral=True
+    )
+
+
+async def _run_update_links(rows, notify_channel_id, notify_user_id):
     success_list = []
     fail_list = []
 
@@ -616,15 +626,10 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
         try:
             matched = await client.fetch_channel(int(thread_id))
         except Exception as e:
-            fail_list.append(f"❌ `{name}` — 스레드 ID {thread_id} 찾기 실패: {e}")
-            continue
-
-        if not matched:
-            fail_list.append(f"❌ `{name}` — 스레드를 찾을 수 없음")
+            fail_list.append(f"❌ `{name}` — fetch 실패: {e}")
             continue
 
         try:
-            # 아카이브된 스레드면 임시로 언아카이브
             was_archived = getattr(matched, 'archived', False)
             if was_archived:
                 await matched.edit(archived=False)
@@ -640,7 +645,6 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
                 if '||' in (msg.content or '') and spoiler_msg is None:
                     spoiler_msg = msg
 
-            # 1. 스포일러 메시지 수정 (또는 신규 전송)
             new_content = f"🔗 **VIP Link:** ||{new_link}||"
             if spoiler_msg:
                 await spoiler_msg.edit(content=new_content)
@@ -648,7 +652,6 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
                 await matched.send(new_content)
             await asyncio.sleep(0.5)
 
-            # 2. 원본 임베드의 링크 + Key 수정
             if embed_msg and embed_msg.embeds:
                 embed = embed_msg.embeds[0]
                 new_embed = discord.Embed(color=embed.color or 0x2b2d31)
@@ -663,10 +666,8 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
                     await embed_msg.edit(embed=new_embed)
                     await asyncio.sleep(0.5)
 
-            # DB도 업데이트
             await save_link(matched.id, new_link)
 
-            # 다시 아카이브
             if was_archived:
                 await matched.edit(archived=True)
 
@@ -682,15 +683,19 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
     if fail_list:
         report += f"❌ **실패 ({len(fail_list)}):**\n" + "\n".join(fail_list)
 
-    chunks = []
-    while len(report) > 1900:
-        split_at = report.rfind('\n', 0, 1900)
-        if split_at == -1: split_at = 1900
-        chunks.append(report[:split_at])
-        report = report[split_at:].lstrip('\n')
-    chunks.append(report)
-    for chunk in chunks:
-        await interaction.followup.send(chunk, ephemeral=True)
+    try:
+        user = await client.fetch_user(notify_user_id)
+        chunks = []
+        while len(report) > 1900:
+            split_at = report.rfind('\n', 0, 1900)
+            if split_at == -1: split_at = 1900
+            chunks.append(report[:split_at])
+            report = report[split_at:].lstrip('\n')
+        chunks.append(report)
+        for chunk in chunks:
+            await user.send(chunk)
+    except Exception:
+        pass
 
 
 @tree.command(name="setup-post", description="관리자용 포스팅 버튼 설정")
