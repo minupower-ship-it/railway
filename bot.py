@@ -1274,6 +1274,42 @@ async def on_member_join(member: discord.Member):
 
 
 # ================== VIP 윈도우 명령어 ==================
+@tree.command(name="refresh-vip", description="모든 VIP 게시글 임베드 문구를 최신 버전으로 갱신")
+async def refresh_vip(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    asyncio.create_task(_run_refresh_vip(interaction.user.id))
+    await interaction.followup.send(
+        "⚙️ VIP 게시글 문구 갱신 시작! 백그라운드에서 처리 중...\n완료되면 DM으로 결과 보낼게.",
+        ephemeral=True
+    )
+
+
+async def _run_refresh_vip(notify_user_id: int):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch('SELECT thread_id FROM links WHERE vip = TRUE')
+    ok_count = 0
+    fail_count = 0
+    for r in rows:
+        try:
+            thread = await client.fetch_channel(r['thread_id'])
+            ok, _ = await set_post_vip(thread, True)
+            if ok:
+                ok_count += 1
+            else:
+                fail_count += 1
+        except Exception:
+            fail_count += 1
+        await asyncio.sleep(1)
+    try:
+        user = await client.fetch_user(notify_user_id)
+        await user.send(f"📊 **VIP Refresh 완료**\n✅ 갱신: {ok_count}\n❌ 실패: {fail_count}")
+    except Exception:
+        pass
+
+
 @tree.command(name="setup-vip-window", description="모든 채널 최신 20개를 VIP 전용으로 설정 (롤링 윈도우 초기화)")
 async def setup_vip_window(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
