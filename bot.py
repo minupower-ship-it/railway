@@ -90,6 +90,7 @@ async def init_db():
                 created_at  TIMESTAMP DEFAULT NOW()
             )
         ''')
+        await conn.execute('ALTER TABLE paid_invites ADD COLUMN IF NOT EXISTS plan TEXT')
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS referral_conversions (
                 id           SERIAL PRIMARY KEY,
@@ -1158,11 +1159,12 @@ async def on_member_join(member: discord.Member):
     # ── 1. paid_invites 체크 (웹 결제 후 초대 플로우) ──
     async with db_pool.acquire() as conn:
         paid_row = await conn.fetchrow(
-            'SELECT session_id, ref, used FROM paid_invites WHERE invite_code=$1', used_code
+            'SELECT session_id, ref, used, plan FROM paid_invites WHERE invite_code=$1', used_code
         )
 
     if paid_row and not paid_row['used']:
         role_granted = False
+        plan = paid_row['plan'] or 'lifetime'
         role = guild.get_role(XHOUSE_ROLE_ID_INT)
         if role:
             try:
@@ -1171,11 +1173,23 @@ async def on_member_join(member: discord.Member):
             except Exception as e:
                 print(f"[Join] 역할 부여 실패: {e}")
 
+        # VIP 플랜이면 VIP 역할도 부여
+        vip_granted = False
+        if plan == 'vip':
+            vip_role = guild.get_role(VIP_ROLE_ID_INT)
+            if vip_role:
+                try:
+                    await member.add_roles(vip_role)
+                    vip_granted = True
+                except Exception as e:
+                    print(f"[Join] VIP 역할 부여 실패: {e}")
+
         ref_label = paid_row['ref'] or 'direct'
         timestamp  = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
         tx_channel = client.get_channel(TX_CHANNEL_ID)
         if tx_channel:
-            status = "✅ Granted" if role_granted else "❌ FAILED"
+            tier   = "VIP ✨" if vip_granted else "Member"
+            status = f"✅ {tier}" if role_granted else "❌ FAILED"
             icon   = "✅" if role_granted else "⚠️"
             try:
                 await tx_channel.send(f"{icon} Web Join | <@{member.id}> | ref: `{ref_label}` | Role: {status} | {timestamp} UTC")
