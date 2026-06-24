@@ -445,9 +445,6 @@ async def set_post_vip(thread: discord.Thread, vip: bool):
         new_value = (
             "——————————————————\n"
             "🔒 **VIP EXCLUSIVE**\n"
-            "This drop is available to **VIP members** only.\n"
-            "Tap the button below to unlock (VIP role required).\n"
-            "Not VIP yet? Upgrade at **xhouse.vip**\n"
             "——————————————————"
         )
         new_embed.add_field(name=field_name, value=new_value, inline=False)
