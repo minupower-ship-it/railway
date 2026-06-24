@@ -1274,6 +1274,38 @@ async def on_member_join(member: discord.Member):
 
 
 # ================== VIP 윈도우 명령어 ==================
+@tree.command(name="backfill-vip", description="과거 VIP 구매자에게 VIP 역할 소급 부여 (Stripe 스캔)")
+async def backfill_vip(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{RENDER_URL}/admin/backfill-vip",
+                headers={"X-API-Key": API_SECRET_KEY},
+                timeout=aiohttp.ClientTimeout(total=300)
+            ) as res:
+                data = await res.json()
+        if 'error' in data:
+            await interaction.followup.send(f"❌ {data['error']}", ephemeral=True)
+            return
+        failed = data.get('failed', [])
+        msg = (
+            "📊 **VIP Backfill 완료**\n"
+            f"스캔한 결제: {data.get('scanned', 0)}\n"
+            f"✅ VIP 역할 부여: {data.get('granted', 0)}\n"
+            f"⚠️ discord_id 없음(스킵): {data.get('skipped_no_discord_id', 0)}\n"
+            f"❌ 실패(서버 떠난 유저 등): {len(failed)}"
+        )
+        if failed:
+            msg += "\n" + ", ".join(failed[:20])
+        await interaction.followup.send(msg, ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {e}\n(많은 결제 스캔 시 시간이 걸려 타임아웃될 수 있어. 서버에선 계속 처리 중일 수 있음.)", ephemeral=True)
+
+
 @tree.command(name="refresh-vip", description="모든 VIP 게시글 임베드 문구를 최신 버전으로 갱신")
 async def refresh_vip(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
