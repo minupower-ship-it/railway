@@ -575,7 +575,7 @@ async def migrate_spoiler(interaction: discord.Interaction):
     )
 
 
-@tree.command(name="update-links", description="엑셀로 Mega 링크 일괄 수정 (A:이름 B:새링크)")
+@tree.command(name="update-links", description="엑셀로 Mega 링크 일괄 수정 (A:이름 B:새링크 C:스레드ID)")
 async def update_links(interaction: discord.Interaction, file: discord.Attachment):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
@@ -590,43 +590,34 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
         await interaction.followup.send(f"❌ 파일 읽기 실패: {e}", ephemeral=True)
         return
 
-    # A:이름 B:링크 파싱 (헤더 자동 스킵)
+    # A:이름(표시용) B:링크 C:스레드ID 파싱
     rows = []
     for row in ws.iter_rows(min_row=1, values_only=True):
         name = str(row[0]).strip() if row[0] else ""
         link = str(row[1]).strip() if len(row) > 1 and row[1] else ""
-        if not name or not link:
+        raw_id = str(row[2]).strip() if len(row) > 2 and row[2] else ""
+        thread_id = raw_id.split('.')[0] if raw_id else ""  # float → int 처리
+        if not link or not thread_id:
             continue
-        if name.lower() == 'name' or 'mega.nz' not in link:
+        if 'mega.nz' not in link:
             continue
-        rows.append((name, link))
+        rows.append((name or thread_id, link, thread_id))
 
     if not rows:
-        await interaction.followup.send("❌ 유효한 행이 없어. A열: 이름, B열: 링크 확인해줘.", ephemeral=True)
+        await interaction.followup.send("❌ 유효한 행이 없어. B열: 링크, C열: 스레드ID 확인해줘.", ephemeral=True)
         return
-
-    # 모든 포럼 채널 스레드 이름 → thread 매핑 빌드
-    thread_map = {}
-    for channel_id in CHANNEL_MAP.values():
-        channel = client.get_channel(channel_id)
-        if not channel or not isinstance(channel, discord.ForumChannel):
-            continue
-        for thread in channel.threads:
-            thread_map[thread.name.lower()] = thread
-        async for thread in channel.archived_threads(limit=200):
-            thread_map[thread.name.lower()] = thread
 
     success_list = []
     fail_list = []
 
-    for name, new_link in rows:
+    for name, new_link, thread_id in rows:
         key = new_link.split('#')[-1] if '#' in new_link else ""
-        # 이름으로 스레드 찾기 (앞부분 일치)
-        matched = None
-        for tname, thread in thread_map.items():
-            if tname.startswith(name.lower()):
-                matched = thread
-                break
+
+        try:
+            matched = await client.fetch_channel(int(thread_id))
+        except Exception as e:
+            fail_list.append(f"❌ `{name}` — 스레드 ID {thread_id} 찾기 실패: {e}")
+            continue
 
         if not matched:
             fail_list.append(f"❌ `{name}` — 스레드를 찾을 수 없음")
