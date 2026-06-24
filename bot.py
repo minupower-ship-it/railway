@@ -507,6 +507,21 @@ async def reconcile_vip_window(channel: discord.ForumChannel, limit: int = VIP_W
         except Exception:
             pass
 
+    # 현재 VIP인데 active 목록에 없는(아카이브된) 스레드도 후보에 포함
+    # → 일시적으로 아카이브된 top-20 글이 잘못 공개 전환되는 것 방지
+    async with db_pool.acquire() as conn:
+        vip_db = await conn.fetch(
+            'SELECT thread_id FROM links WHERE vip = TRUE AND channel_id = $1', channel.id
+        )
+    for row in vip_db:
+        if row['thread_id'] not in threads:
+            try:
+                t = await client.fetch_channel(row['thread_id'])
+                if getattr(t, 'parent_id', None) == channel.id:
+                    threads[t.id] = t
+            except Exception:
+                pass
+
     ordered = sorted(threads.values(), key=lambda t: t.id, reverse=True)
     vip_set = set(t.id for t in ordered[:limit])
     by_id   = {t.id: t for t in ordered}
@@ -1337,24 +1352,17 @@ async def vip_unlock(interaction: discord.Interaction, thread_id: str):
 
 @tasks.loop(hours=6)
 async def keep_vip_unarchived():
-    """VIP 스레드가 아카이브되면 버튼이 안 먹으므로 주기적으로 깨움"""
+    """VIP 스레드가 아카이브되면 버튼이 안 먹으므로 주기적으로 깨움 (DB 기준 전체 확인)"""
     if db_pool is None:
         return
     async with db_pool.acquire() as conn:
         rows = await conn.fetch('SELECT thread_id FROM links WHERE vip = TRUE')
-    vip_ids = {r['thread_id'] for r in rows}
-    for ch_id in CHANNEL_MAP.values():
-        channel = client.get_channel(ch_id)
-        if not isinstance(channel, discord.ForumChannel):
-            continue
+    for r in rows:
         try:
-            async for thread in channel.archived_threads(limit=50):
-                if thread.id in vip_ids:
-                    try:
-                        await thread.edit(archived=False)
-                        await asyncio.sleep(1)
-                    except Exception:
-                        pass
+            thread = await client.fetch_channel(r['thread_id'])
+            if getattr(thread, 'archived', False):
+                await thread.edit(archived=False)
+                await asyncio.sleep(1)
         except Exception:
             pass
 
