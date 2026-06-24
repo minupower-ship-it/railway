@@ -31,7 +31,8 @@ invite_cache = {}  # {guild_id: {invite_code: uses}}
 XHOUSE_GUILD_ID_INT  = int(os.getenv('XHOUSE_GUILD_ID', '0'))
 XHOUSE_ROLE_ID_INT   = int(os.getenv('XHOUSE_ROLE_ID',  '0'))
 VIP_ROLE_ID_INT      = int(os.getenv('XHOUSE_VIP_ROLE_ID', '1519415094235365386'))
-VIP_WINDOW_SIZE      = 20  # 채널당 최신 N개 = VIP 전용
+VIP_WINDOW_SIZE      = 5   # 채널당 최신 N개 = VIP 전용
+FULL_VIP_CHANNELS    = {1489310534544265376}  # 전체 글이 VIP 전용인 채널 (collabs)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -510,11 +511,16 @@ async def set_post_vip(thread: discord.Thread, vip: bool):
 
 
 async def reconcile_vip_window(channel: discord.ForumChannel, limit: int = VIP_WINDOW_SIZE, deep: bool = False):
-    """채널의 최신 limit개를 VIP로, 그 외 기존 VIP는 공개로 전환"""
+    """채널의 최신 limit개를 VIP로, 그 외 기존 VIP는 공개로 전환.
+    FULL_VIP_CHANNELS에 속한 채널은 전체 글을 VIP로 유지."""
+    full_vip = channel.id in FULL_VIP_CHANNELS
+    if full_vip:
+        deep = True  # 모든 글을 봐야 하므로 아카이브까지 스캔
+
     threads = {t.id: t for t in channel.threads}
     if deep:
         try:
-            async for t in channel.archived_threads(limit=200):
+            async for t in channel.archived_threads(limit=None if full_vip else 200):
                 threads[t.id] = t
                 await asyncio.sleep(0.4)
         except Exception:
@@ -536,13 +542,14 @@ async def reconcile_vip_window(channel: discord.ForumChannel, limit: int = VIP_W
                 pass
 
     ordered = sorted(threads.values(), key=lambda t: t.id, reverse=True)
-    vip_set = set(t.id for t in ordered[:limit])
+    eff_limit = len(ordered) if full_vip else limit
+    vip_set = set(t.id for t in ordered[:eff_limit])
     by_id   = {t.id: t for t in ordered}
 
     changes = []
 
-    # 1) 최신 limit개 → VIP (아직 아니면)
-    for t in ordered[:limit]:
+    # 1) 최신 eff_limit개 → VIP (아직 아니면)
+    for t in ordered[:eff_limit]:
         async with db_pool.acquire() as conn:
             r = await conn.fetchrow('SELECT vip FROM links WHERE thread_id=$1', t.id)
         if r and r['vip']:
@@ -1342,7 +1349,7 @@ async def _run_refresh_vip(notify_user_id: int):
         pass
 
 
-@tree.command(name="setup-vip-window", description="모든 채널 최신 20개를 VIP 전용으로 설정 (롤링 윈도우 초기화)")
+@tree.command(name="setup-vip-window", description="모든 채널 최신 N개를 VIP 전용으로 설정 (collabs는 전체, 롤링 윈도우 초기화)")
 async def setup_vip_window(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
@@ -1378,7 +1385,7 @@ async def _run_setup_vip_window(notify_user_id: int):
         pass
 
 
-@tree.command(name="vip-lock", description="특정 게시글을 영구 VIP 전용으로 고정 (최신20 윈도우와 무관하게 유지)")
+@tree.command(name="vip-lock", description="특정 게시글을 영구 VIP 전용으로 고정 (롤링 윈도우와 무관하게 유지)")
 async def vip_lock(interaction: discord.Interaction, thread_id: str):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
@@ -1400,12 +1407,12 @@ async def vip_lock(interaction: discord.Interaction, thread_id: str):
     async with db_pool.acquire() as conn:
         await conn.execute('UPDATE links SET vip_locked = TRUE WHERE thread_id=$1', int(tid))
     await interaction.followup.send(
-        f"🔒 `{getattr(thread, 'name', tid)}` 영구 VIP 고정됨. 최신 20개 윈도우와 상관없이 계속 VIP 전용으로 유지돼.",
+        f"🔒 `{getattr(thread, 'name', tid)}` 영구 VIP 고정됨. 롤링 윈도우와 상관없이 계속 VIP 전용으로 유지돼.",
         ephemeral=True
     )
 
 
-@tree.command(name="vip-unlock", description="영구 VIP 고정 해제 (다시 최신20 윈도우 규칙 적용)")
+@tree.command(name="vip-unlock", description="영구 VIP 고정 해제 (다시 롤링 윈도우 규칙 적용)")
 async def vip_unlock(interaction: discord.Interaction, thread_id: str):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
@@ -1426,7 +1433,7 @@ async def vip_unlock(interaction: discord.Interaction, thread_id: str):
     except Exception:
         pass
     await interaction.followup.send(
-        f"🔓 `{tid}` 영구 고정 해제됨. 최신 20개 안에 있으면 VIP 유지, 밖이면 곧 공개로 전환돼.",
+        f"🔓 `{tid}` 영구 고정 해제됨. 윈도우 안에 있으면 VIP 유지, 밖이면 곧 공개로 전환돼.",
         ephemeral=True
     )
 
