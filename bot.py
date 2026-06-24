@@ -613,7 +613,7 @@ async def update_links(interaction: discord.Interaction, file: discord.Attachmen
             continue
         for thread in channel.threads:
             thread_map[thread.name.lower()] = thread
-        async for thread in channel.archived_threads(limit=None):
+        async for thread in channel.archived_threads(limit=200):
             thread_map[thread.name.lower()] = thread
 
     success_list = []
