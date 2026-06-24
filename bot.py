@@ -70,6 +70,7 @@ async def init_db():
             )
         ''')
         await conn.execute('ALTER TABLE links ADD COLUMN IF NOT EXISTS vip BOOLEAN DEFAULT FALSE')
+        await conn.execute('ALTER TABLE links ADD COLUMN IF NOT EXISTS channel_id BIGINT')
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS posted_names (
                 name TEXT PRIMARY KEY
@@ -470,11 +471,12 @@ async def set_post_vip(thread: discord.Thread, vip: bool):
         new_embed.add_field(name=field_name, value=new_value, inline=False)
         await starter.edit(embed=new_embed, view=None)
 
+    ch_id = getattr(thread, 'parent_id', None)
     async with db_pool.acquire() as conn:
         await conn.execute(
-            'INSERT INTO links (thread_id, mega_link, vip) VALUES ($1, $2, $3) '
-            'ON CONFLICT (thread_id) DO UPDATE SET vip = $3',
-            thread.id, link or '', vip
+            'INSERT INTO links (thread_id, mega_link, vip, channel_id) VALUES ($1, $2, $3, $4) '
+            'ON CONFLICT (thread_id) DO UPDATE SET vip = $3, channel_id = $4',
+            thread.id, link or '', vip, ch_id
         )
     return True, "ok"
 
@@ -507,9 +509,11 @@ async def reconcile_vip_window(channel: discord.ForumChannel, limit: int = VIP_W
             changes.append((t.id, True))
         await asyncio.sleep(1)
 
-    # 2) 현재 VIP인데 윈도우 밖으로 밀린 것 → 공개
+    # 2) 현재 VIP인데 윈도우 밖으로 밀린 것 → 공개 (해당 채널만)
     async with db_pool.acquire() as conn:
-        vip_rows = await conn.fetch('SELECT thread_id FROM links WHERE vip = TRUE')
+        vip_rows = await conn.fetch(
+            'SELECT thread_id FROM links WHERE vip = TRUE AND channel_id = $1', channel.id
+        )
     for row in vip_rows:
         tid = row['thread_id']
         if tid in vip_set:
