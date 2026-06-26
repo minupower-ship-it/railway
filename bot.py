@@ -33,6 +33,8 @@ XHOUSE_ROLE_ID_INT   = int(os.getenv('XHOUSE_ROLE_ID',  '0'))
 VIP_ROLE_ID_INT      = int(os.getenv('XHOUSE_VIP_ROLE_ID', '1519415094235365386'))
 VIP_WINDOW_SIZE      = 5   # 채널당 최신 N개 = VIP 전용
 FULL_VIP_CHANNELS    = {1489310534544265376}  # 전체 글이 VIP 전용인 채널 (collabs)
+INDEX_CHANNEL_ID     = 1519902202498519120  # 이름 색인(바로가기) 채널
+index_lock           = asyncio.Lock()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -73,6 +75,7 @@ async def init_db():
         await conn.execute('ALTER TABLE links ADD COLUMN IF NOT EXISTS vip BOOLEAN DEFAULT FALSE')
         await conn.execute('ALTER TABLE links ADD COLUMN IF NOT EXISTS channel_id BIGINT')
         await conn.execute('ALTER TABLE links ADD COLUMN IF NOT EXISTS vip_locked BOOLEAN DEFAULT FALSE')
+        await conn.execute('ALTER TABLE links ADD COLUMN IF NOT EXISTS name TEXT')
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS posted_names (
                 name TEXT PRIMARY KEY
@@ -352,15 +355,16 @@ class ChannelSelect(discord.ui.Select):
             )
             async with db_pool.acquire() as conn:
                 await conn.execute(
-                    'INSERT INTO links (thread_id, mega_link, vip, channel_id) VALUES ($1, $2, TRUE, $3) '
-                    'ON CONFLICT (thread_id) DO UPDATE SET mega_link = $2, vip = TRUE, channel_id = $3',
-                    thread.id, self.link, channel.id
+                    'INSERT INTO links (thread_id, mega_link, vip, channel_id, name) VALUES ($1, $2, TRUE, $3, $4) '
+                    'ON CONFLICT (thread_id) DO UPDATE SET mega_link = $2, vip = TRUE, channel_id = $3, name = $4',
+                    thread.id, self.link, channel.id, self.post_name
                 )
             await interaction.response.send_message("✅ Posted as VIP! Updating window...", ephemeral=True)
             try:
                 await reconcile_vip_window(channel)
             except Exception as e:
                 print(f"[VIP reconcile] {e}")
+            asyncio.create_task(build_and_post_index())
         else:
             embed = discord.Embed(color=0x2b2d31)
             embed.set_image(url=self.image_url)
@@ -599,6 +603,63 @@ async def reconcile_vip_window(channel: discord.ForumChannel, limit: int = VIP_W
     return changes
 
 
+# ── 이름 색인(바로가기) 채널 ──
+def _chunk_index_lines(lines, limit=3900):
+    chunks, cur = [], ""
+    for ln in lines:
+        if cur and len(cur) + len(ln) + 1 > limit:
+            chunks.append(cur)
+            cur = ln
+        else:
+            cur = ln if not cur else cur + "\n" + ln
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+async def build_and_post_index():
+    """DB의 name 정보로 채널별 A-Z 바로가기 목록을 인덱스 채널에 게시"""
+    channel = client.get_channel(INDEX_CHANNEL_ID)
+    if not channel:
+        return
+    async with index_lock:
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT thread_id, channel_id, name, vip FROM links WHERE name IS NOT NULL AND name <> ''"
+            )
+        by_channel = {}
+        for r in rows:
+            by_channel.setdefault(r['channel_id'], []).append(r)
+
+        # 기존 봇 메시지 삭제 (전체)
+        try:
+            async for msg in channel.history(limit=None):
+                if msg.author == client.user:
+                    await msg.delete()
+                    await asyncio.sleep(0.3)
+        except Exception:
+            pass
+
+        await channel.send("📒 **Content Directory** — find any model by name, then tap to jump.")
+
+        for key, ch_id in CHANNEL_MAP.items():
+            items = by_channel.get(ch_id, [])
+            if not items:
+                continue
+            items.sort(key=lambda r: (r['name'] or '').lower())
+            lines = []
+            for r in items:
+                url = f"https://discord.com/channels/{XHOUSE_GUILD_ID_INT}/{r['thread_id']}"
+                star = " ✨" if r['vip'] else ""
+                lines.append(f"[{r['name']}]({url}){star}")
+            chunks = _chunk_index_lines(lines)
+            for i, chunk in enumerate(chunks):
+                title = f"📁 {key.upper()} ({len(items)})" if i == 0 else f"📁 {key.upper()} (cont.)"
+                embed = discord.Embed(title=title, description=chunk, color=0x7b6eff)
+                await channel.send(embed=embed)
+                await asyncio.sleep(0.5)
+
+
 class PostButtonView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -718,6 +779,7 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
                 await save_link(thread.id, mega_link)
                 posted_channels.add(channel.id)
                 async with db_pool.acquire() as conn:
+                    await conn.execute('UPDATE links SET name = $1, channel_id = $2 WHERE thread_id = $3', folder_name, channel.id, thread.id)
                     await conn.execute('INSERT INTO posted_names (name) VALUES ($1) ON CONFLICT DO NOTHING', folder_name)
                 for extra_url in image_urls[1:]:
                     await thread.send(extra_url)
@@ -741,6 +803,10 @@ async def auto_post(interaction: discord.Interaction, file: discord.Attachment):
                 await reconcile_vip_window(ch)
             except Exception as e:
                 print(f"[VIP reconcile] {ch_id}: {e}")
+
+    # 이름 색인 갱신
+    if posted_channels:
+        asyncio.create_task(build_and_post_index())
 
     # 리포트
     report = f"📊 **Auto-Post Report**\n\n"
@@ -1292,6 +1358,19 @@ async def on_member_join(member: discord.Member):
         print(f"[Join] Promoter source 기록: {member} → {promo_row['promoter']}")
 
 
+# ================== 스레드 삭제 → 색인에서 제거 ==================
+@client.event
+async def on_thread_delete(thread: discord.Thread):
+    if getattr(thread, 'parent_id', None) not in CHANNEL_MAP.values():
+        return
+    try:
+        async with db_pool.acquire() as conn:
+            await conn.execute('DELETE FROM links WHERE thread_id = $1', thread.id)
+    except Exception:
+        pass
+    asyncio.create_task(build_and_post_index())
+
+
 # ================== VIP 윈도우 명령어 ==================
 @tree.command(name="backfill-vip", description="과거 VIP 구매자에게 VIP 역할 소급 부여 (Stripe 스캔)")
 async def backfill_vip(interaction: discord.Interaction):
@@ -1357,6 +1436,54 @@ async def _run_refresh_vip(notify_user_id: int):
     try:
         user = await client.fetch_user(notify_user_id)
         await user.send(f"📊 **VIP Refresh 완료**\n✅ 갱신: {ok_count}\n❌ 실패: {fail_count}")
+    except Exception:
+        pass
+
+
+@tree.command(name="build-index", description="이름 색인(바로가기) 채널을 전체 스캔 후 재생성")
+async def build_index_cmd(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    asyncio.create_task(_run_build_index(interaction.user.id))
+    await interaction.followup.send(
+        "📒 색인 생성 시작! 모든 채널 스캔 후 인덱스 채널에 게시 중... 완료되면 DM 보낼게.",
+        ephemeral=True
+    )
+
+
+async def _run_build_index(notify_user_id: int):
+    total = 0
+    for key, ch_id in CHANNEL_MAP.items():
+        channel = client.get_channel(ch_id)
+        if not isinstance(channel, discord.ForumChannel):
+            continue
+        threads = {t.id: t for t in channel.threads}
+        try:
+            async for t in channel.archived_threads(limit=None):
+                threads[t.id] = t
+                await asyncio.sleep(0.3)
+        except Exception:
+            pass
+        for t in threads.values():
+            try:
+                async with db_pool.acquire() as conn:
+                    await conn.execute(
+                        'INSERT INTO links (thread_id, mega_link, name, channel_id) VALUES ($1, $2, $3, $4) '
+                        'ON CONFLICT (thread_id) DO UPDATE SET name = $3, channel_id = $4',
+                        t.id, '', t.name, ch_id
+                    )
+                total += 1
+            except Exception:
+                pass
+    try:
+        await build_and_post_index()
+    except Exception as e:
+        print(f"[Index] build error: {e}")
+    try:
+        user = await client.fetch_user(notify_user_id)
+        await user.send(f"📒 **색인 생성 완료** — 총 {total}개 게시글 인덱싱됨")
     except Exception:
         pass
 
