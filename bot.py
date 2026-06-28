@@ -1358,9 +1358,9 @@ async def on_member_join(member: discord.Member):
         print(f"[Join] Promoter source 기록: {member} → {promo_row['promoter']}")
 
 
-# ================== 스레드 삭제 → 색인에서 제거 ==================
 @client.event
 async def on_thread_delete(thread: discord.Thread):
+    """게시글 삭제 시 DB 정리 + 색인 갱신"""
     if getattr(thread, 'parent_id', None) not in CHANNEL_MAP.values():
         return
     try:
@@ -1486,6 +1486,59 @@ async def _run_build_index(notify_user_id: int):
         await user.send(f"📒 **색인 생성 완료** — 총 {total}개 게시글 인덱싱됨")
     except Exception:
         pass
+
+
+@tree.command(name="update-image", description="게시글의 사진(이미지)을 교체 (스레드ID + 새 이미지 URL)")
+async def update_image(interaction: discord.Interaction, thread_id: str, image_url: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    tid = thread_id.strip().split('.')[0]
+    if not tid.isdigit():
+        await interaction.followup.send("❌ 스레드 ID는 숫자여야 해.", ephemeral=True)
+        return
+    image_url = image_url.strip()
+    if not image_url.startswith('http'):
+        await interaction.followup.send("❌ 올바른 이미지 URL이 아니야 (http로 시작해야 함).", ephemeral=True)
+        return
+
+    try:
+        thread = await client.fetch_channel(int(tid))
+    except Exception as e:
+        await interaction.followup.send(f"❌ 스레드를 찾을 수 없어 (`{tid}`): {e}", ephemeral=True)
+        return
+
+    try:
+        was_archived = getattr(thread, 'archived', False)
+        if was_archived:
+            await thread.edit(archived=False)
+            await asyncio.sleep(0.4)
+
+        starter = None
+        try:
+            starter = await thread.fetch_message(thread.id)
+        except Exception:
+            async for m in thread.history(limit=20, oldest_first=True):
+                if m.author == client.user and m.embeds:
+                    starter = m
+                    break
+        if not starter or not starter.embeds:
+            await interaction.followup.send("❌ 임베드 메시지를 찾을 수 없어.", ephemeral=True)
+            return
+
+        embed = starter.embeds[0]
+        new_embed = discord.Embed(color=embed.color or 0x2b2d31)
+        new_embed.set_image(url=image_url)
+        for f in embed.fields:
+            new_embed.add_field(name=f.name, value=f.value, inline=f.inline)
+        # view(=VIP 버튼)는 edit에서 건드리지 않으면 그대로 유지됨
+        await starter.edit(embed=new_embed)
+
+        await interaction.followup.send(f"✅ `{getattr(thread, 'name', tid)}` 사진 교체 완료!", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ 사진 교체 실패: {e}", ephemeral=True)
 
 
 @tree.command(name="setup-vip-window", description="모든 채널 최신 N개를 VIP 전용으로 설정 (collabs는 전체, 롤링 윈도우 초기화)")
