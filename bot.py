@@ -915,6 +915,60 @@ async def migrate_spoiler(interaction: discord.Interaction):
     )
 
 
+@tree.command(name="rotate-links", description="링크 회전: 엑셀 A:옛링크 B:새링크 — 옛 링크로 스레드 자동 매칭 후 교체")
+async def rotate_links(interaction: discord.Interaction, file: discord.Attachment):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        file_bytes = await file.read()
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
+        ws = wb.active
+    except Exception as e:
+        await interaction.followup.send(f"❌ 파일 읽기 실패: {e}", ephemeral=True)
+        return
+
+    pairs = []
+    for row in ws.iter_rows(min_row=1, values_only=True):
+        old = str(row[0]).strip() if row[0] else ""
+        new = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+        if 'mega.nz' not in old or 'mega.nz' not in new:
+            continue
+        pairs.append((old, new))
+
+    if not pairs:
+        await interaction.followup.send("❌ 유효한 행이 없어. A열: 옛 링크, B열: 새 링크.", ephemeral=True)
+        return
+
+    # 옛 링크 → 스레드 매칭 (DB)
+    rows = []
+    unmatched = []
+    async with db_pool.acquire() as conn:
+        for old, new in pairs:
+            db_rows = await conn.fetch(
+                'SELECT thread_id, name FROM links WHERE mega_link = $1', old
+            )
+            if not db_rows:
+                unmatched.append(old)
+                continue
+            for r in db_rows:
+                rows.append((r['name'] or str(r['thread_id']), new, str(r['thread_id'])))
+
+    if not rows:
+        await interaction.followup.send(
+            f"❌ 매칭된 스레드가 없어. (옛 링크 {len(pairs)}개 모두 DB에 없음)", ephemeral=True
+        )
+        return
+
+    asyncio.create_task(_run_update_links(rows, interaction.channel_id, interaction.user.id))
+    msg = f"⚙️ Rotate Links 시작! 매칭 {len(rows)}개 처리 중... 완료되면 DM 보낼게."
+    if unmatched:
+        msg += f"\n⚠️ DB에 없는 옛 링크 {len(unmatched)}개 (게시 안 된 폴더일 수 있음)"
+    await interaction.followup.send(msg, ephemeral=True)
+
+
 @tree.command(name="update-links", description="엑셀로 Mega 링크 일괄 수정 (A:이름 B:새링크 C:스레드ID)")
 async def update_links(interaction: discord.Interaction, file: discord.Attachment):
     if not interaction.user.guild_permissions.administrator:
