@@ -1165,7 +1165,7 @@ class ReviewModal(discord.ui.Modal, title="Leave a Review"):
             return
 
         stars_display = "⭐" * self.stars
-        embed = discord.Embed(color=0x9b59b6, timestamp=datetime.utcnow())
+        embed = discord.Embed(color=0x9b59b6)
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
         embed.description = f'*"{self.review_text.value}"*\n\n{stars_display}'
         embed.set_footer(text=f"{interaction.user.display_name} — Verified Member")
@@ -1220,6 +1220,42 @@ class SupportPanelView(discord.ui.View):
             view=StarRatingView(),
             ephemeral=True
         )
+
+
+@tree.command(name="strip-review-dates", description="기존 리뷰 임베드의 날짜/시간 제거 (서포트 채널)")
+async def strip_review_dates(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    channel = client.get_channel(SUPPORT_CHANNEL_ID)
+    if not channel:
+        await interaction.followup.send("❌ 서포트 채널을 찾을 수 없어.", ephemeral=True)
+        return
+
+    fixed = 0
+    async for msg in channel.history(limit=500):
+        if msg.author != client.user or not msg.embeds:
+            continue
+        embed = msg.embeds[0]
+        if embed.timestamp is None:
+            continue
+        if 'Verified Member' not in (embed.footer.text or '' if embed.footer else ''):
+            continue
+        new_embed = discord.Embed(color=embed.color or 0x9b59b6, description=embed.description)
+        if embed.author and embed.author.name:
+            new_embed.set_author(name=embed.author.name, icon_url=embed.author.icon_url or None)
+        if embed.footer and embed.footer.text:
+            new_embed.set_footer(text=embed.footer.text)
+        try:
+            await msg.edit(embed=new_embed)
+            fixed += 1
+            await asyncio.sleep(1)
+        except Exception:
+            pass
+
+    await interaction.followup.send(f"✅ 리뷰 {fixed}개에서 날짜/시간 제거 완료.", ephemeral=True)
 
 
 @tree.command(name="setup-support", description="Support & Review 패널 설정")
