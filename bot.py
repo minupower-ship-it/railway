@@ -290,8 +290,8 @@ async def setup_payment(interaction: discord.Interaction):
         description="Get lifetime access to exclusive content, model packages, and private channels.",
         color=0x7b6eff
     )
-    embed.add_field(name="Lifetime — ~~$55~~ $45 🔥", value="• Private request\n• 1,000+ model packages\n• Lifetime access to all channels\n• Priority support", inline=True)
-    embed.add_field(name="VIP Lifetime — ~~$90~~ $80 🔥", value="• Everything in Lifetime\n• Unlimited requests for life\n• Early access to new drops\n• Private personal request", inline=True)
+    embed.add_field(name="Lifetime — $45 🔥", value="~~$55~~ → **$45** Limited Sale\n• Private request\n• 1,000+ model packages\n• Lifetime access to all channels\n• Priority support", inline=True)
+    embed.add_field(name="VIP Lifetime — $80 🔥", value="~~$90~~ → **$80** Limited Sale\n• Everything in Lifetime\n• Unlimited requests for life\n• Early access to new drops\n• Private personal request", inline=True)
     embed.set_footer(text="One-time payment. No subscriptions. No renewals.")
     view = PaymentView()
     await interaction.response.send_message(embed=embed, view=view)
