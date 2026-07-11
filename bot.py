@@ -233,11 +233,11 @@ class PaymentView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Get Lifetime — $55", style=discord.ButtonStyle.success, emoji="💳", custom_id="xhouse_lifetime")
+    @discord.ui.button(label="Get Lifetime — $45", style=discord.ButtonStyle.success, emoji="💳", custom_id="xhouse_lifetime")
     async def get_lifetime(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_payment(interaction, 'lifetime')
 
-    @discord.ui.button(label="Get VIP — $90", style=discord.ButtonStyle.primary, emoji="✨", custom_id="xhouse_vip")
+    @discord.ui.button(label="Get VIP — $80", style=discord.ButtonStyle.primary, emoji="✨", custom_id="xhouse_vip")
     async def get_vip(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_payment(interaction, 'vip')
 
@@ -251,7 +251,7 @@ class PaymentView(discord.ui.View):
             return
         if not has_base:
             await interaction.response.send_message(
-                "❌ Upgrade is for existing **Lifetime members** only.\nGet **Lifetime — $55** first, then upgrade anytime.",
+                "❌ Upgrade is for existing **Lifetime members** only.\nGet **Lifetime — $45** first, then upgrade anytime.",
                 ephemeral=True
             )
             return
@@ -290,8 +290,8 @@ async def setup_payment(interaction: discord.Interaction):
         description="Get lifetime access to exclusive content, model packages, and private channels.",
         color=0x7b6eff
     )
-    embed.add_field(name="Lifetime — $55", value="• Private request\n• 1,000+ model packages\n• Lifetime access to all channels\n• Priority support", inline=True)
-    embed.add_field(name="VIP Lifetime — $90", value="• Everything in Lifetime\n• Unlimited requests for life\n• Early access to new drops\n• Private personal request", inline=True)
+    embed.add_field(name="Lifetime — ~~$55~~ $45 🔥", value="• Private request\n• 1,000+ model packages\n• Lifetime access to all channels\n• Priority support", inline=True)
+    embed.add_field(name="VIP Lifetime — ~~$90~~ $80 🔥", value="• Everything in Lifetime\n• Unlimited requests for life\n• Early access to new drops\n• Private personal request", inline=True)
     embed.set_footer(text="One-time payment. No subscriptions. No renewals.")
     view = PaymentView()
     await interaction.response.send_message(embed=embed, view=view)
