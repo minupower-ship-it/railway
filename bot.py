@@ -1330,6 +1330,42 @@ async def setup_promo_invite(interaction: discord.Interaction, name: str):
         await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
 
+# ================== 결제 세션 → 멤버 조회 ==================
+@tree.command(name="whois-payment", description="결제 세션 ID로 어떤 멤버인지 조회")
+async def whois_payment(interaction: discord.Interaction, session_id: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    sid = session_id.strip().strip('`').rstrip('.')
+    async with db_pool.acquire() as conn:
+        # 전체 또는 앞부분 일치 (로그엔 앞 24~28자만 표시되므로)
+        row = await conn.fetchrow(
+            "SELECT session_id, discord_id, ref, plan, converted_at FROM referral_conversions "
+            "WHERE session_id LIKE $1 || '%' ORDER BY converted_at DESC LIMIT 1",
+            sid
+        )
+
+    if not row:
+        await interaction.followup.send(f"❌ `{sid[:30]}` 로 시작하는 세션을 찾을 수 없어.", ephemeral=True)
+        return
+
+    lines = [f"🧾 **Session:** `{row['session_id'][:40]}...`"]
+    if row['discord_id']:
+        lines.append(f"👤 **Member:** <@{row['discord_id']}> (`{row['discord_id']}`)")
+        member = interaction.guild.get_member(row['discord_id']) if interaction.guild else None
+        if member:
+            lines.append(f"🏷️ **Tier:** {member_tier_label(member)}")
+    else:
+        lines.append("👤 **Member:** 아직 연결 안 됨 — 초대 입장 또는 Connect Discord 전이야")
+    lines.append(f"🔗 **ref:** `{row['ref'] or 'direct'}` | **plan:** `{row['plan'] or 'lifetime'}`")
+    if row['converted_at']:
+        lines.append(f"🕐 {row['converted_at'].strftime('%Y-%m-%d %H:%M')} UTC")
+
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
 # ================== 프로모터 통계 ==================
 @tree.command(name="promo-stats", description="프로모터별 전환 통계")
 async def promo_stats(interaction: discord.Interaction, promoter: str = None):
@@ -1414,8 +1450,9 @@ async def on_member_join(member: discord.Member):
             tier   = "VIP ✨" if vip_granted else "Member"
             status = f"✅ {tier}" if role_granted else "❌ FAILED"
             icon   = "✅" if role_granted else "⚠️"
+            sid    = paid_row['session_id'] or ''
             try:
-                await tx_channel.send(f"{icon} Web Join | <@{member.id}> | ref: `{ref_label}` | Role: {status} | {timestamp} UTC")
+                await tx_channel.send(f"{icon} Web Join | <@{member.id}> | ref: `{ref_label}` | Role: {status} | `{sid[:28]}...` | {timestamp} UTC")
             except Exception:
                 pass
 
