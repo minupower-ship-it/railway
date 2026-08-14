@@ -1286,23 +1286,42 @@ async def post_preview():
     if not channel:
         return
 
-    # 이전 메시지 삭제
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow('SELECT message_id FROM preview_msg ORDER BY id DESC LIMIT 1')
-    if row:
-        try:
-            old_msg = await channel.fetch_message(row['message_id'])
-            await old_msg.delete()
-        except Exception:
-            pass
+    # 1) DB에 기록된 직전 메시지 삭제 (오래된 메시지도 정확히 타겟)
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow('SELECT message_id FROM preview_msg ORDER BY id DESC LIMIT 1')
+        if row:
+            try:
+                old_msg = await channel.fetch_message(row['message_id'])
+                await old_msg.delete()
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[Preview] DB read error: {e}")
 
-    # 새 메시지 포스팅
+    # 2) 채널에 남아있는 옛 프리뷰 메시지 정리
+    #    (DB 저장 실패/봇 재시작으로 생긴 고아 메시지 회수)
+    try:
+        async for msg in channel.history(limit=50):
+            if msg.author == client.user and 'Check this free preview' in (msg.content or ''):
+                try:
+                    await msg.delete()
+                    await asyncio.sleep(0.5)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[Preview] cleanup error: {e}")
+
+    # 3) 새 메시지 포스팅
     new_msg = await channel.send("@everyone\nCheck this free preview!  https://www.xhouse.vip/")
 
-    # 메시지 ID 저장
-    async with db_pool.acquire() as conn:
-        await conn.execute('DELETE FROM preview_msg')
-        await conn.execute('INSERT INTO preview_msg (message_id) VALUES ($1)', new_msg.id)
+    # 4) 메시지 ID 저장 (실패해도 다음 회차의 2)에서 회수됨)
+    try:
+        async with db_pool.acquire() as conn:
+            await conn.execute('DELETE FROM preview_msg')
+            await conn.execute('INSERT INTO preview_msg (message_id) VALUES ($1)', new_msg.id)
+    except Exception as e:
+        print(f"[Preview] DB save error: {e}")
 
 
 # ================== 프로모터 초대 설정 ==================
@@ -1794,7 +1813,8 @@ async def on_ready():
         except Exception:
             pass
     await tree.sync()
-    post_preview.start()
+    if not post_preview.is_running():
+        post_preview.start()
     if not keep_vip_unarchived.is_running():
         keep_vip_unarchived.start()
     print(f"✅ XHouse Bot 온라인! ({client.user})")
