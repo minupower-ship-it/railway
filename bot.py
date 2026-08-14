@@ -87,6 +87,13 @@ async def init_db():
                 message_id BIGINT
             )
         ''')
+        # 인스턴스가 여러 개여도 회차당 1개만 올리도록 하는 잠금
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS preview_lock (
+                slot       TEXT PRIMARY KEY,
+                claimed_at TIMESTAMP DEFAULT NOW()
+            )
+        ''')
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS paid_invites (
                 invite_code TEXT PRIMARY KEY,
@@ -1284,6 +1291,23 @@ async def setup_support(interaction: discord.Interaction):
 async def post_preview():
     channel = client.get_channel(PREVIEW_CHANNEL_ID)
     if not channel:
+        return
+
+    # 0) 회차 잠금 — 인스턴스가 여러 개여도 먼저 잡은 하나만 게시
+    slot = datetime.now(EDMONTON_TZ).strftime('%Y-%m-%dT%H')
+    try:
+        async with db_pool.acquire() as conn:
+            claimed = await conn.fetchval(
+                'INSERT INTO preview_lock (slot) VALUES ($1) '
+                'ON CONFLICT (slot) DO NOTHING RETURNING slot',
+                slot
+            )
+            await conn.execute("DELETE FROM preview_lock WHERE claimed_at < NOW() - INTERVAL '7 days'")
+    except Exception as e:
+        print(f"[Preview] lock error: {e} — 중복 방지 불가하여 스킵")
+        return
+    if not claimed:
+        print(f"[Preview] slot {slot} 이미 다른 인스턴스가 처리함 — 스킵")
         return
 
     # 1) DB에 기록된 직전 메시지 삭제 (오래된 메시지도 정확히 타겟)
